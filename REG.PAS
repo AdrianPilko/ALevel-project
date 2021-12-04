@@ -1,0 +1,3367 @@
+(**************************************************************************)
+(* Program Name   : AttendanceSystem                                      *)
+(* ---------------------------------------------------------------------- *)
+(*                                FILE NAMES                              *)
+(* Executable     : PROJECT.EXE                                           *)
+(* Source Code    : PROJECT.PAS                                           *)
+(* ---------------------------------------------------------------------- *)
+(* System         : IBM Compatible PC 486SX25Mhz O.S MS-DOS 7, Win95      *)
+(* ---------------------------------------------------------------------- *)
+(* Abstract       : Program developed and written for A Level Project     *)
+(* ---------------------------------------------------------------------- *)
+(* Author         : Adrian Pilkington                                     *)
+(* ---------------------------------------------------------------------- *)
+(* Date Started   : 23/09/95                                              *)
+(* Date Completed : 25/02/96 ( 5 Months )                                 *)
+(**************************************************************************)
+
+(* NOTE :Even if run from drive other than a:\, a disk must be present    *)
+(*       in a:\ as the password file (pass.$$$) and setup file(Tsetup.ini)*)
+(*       (Tsetup.ini) are required to be on this drive.                   *)
+
+(* This version was slightly updated with passwords removed, so that can  *)
+(* be used for demonstration purposes                                     *)
+
+
+PROGRAM AttendanceSystem;
+
+USES
+    Crt, Dos, Graph, printer;  (* STANDARD PASCAL UNITS *)
+
+    (************* GLOBAL CONSTANTS ***************)
+CONST              
+     MaxGroups=15;    (* If these 3 constants are altered, the files *)
+     NumOfStudents=50;(* must be re-initialised *)
+     MaxAttend=10;    (*NOTE Changed from 100 for demo *)
+     rows=2;          (* For Password, matrix encryption/decryption *)
+     cols=4;          (* For Password, matrix encryption/decryption *)
+     SizeOfPaper=50;  (* Used in print procedures *)
+     MaxBackups=10;   (* Used in S52_SysBackup relates to extension *)
+     PadOutStr='.......................';   (* used in Password routines*)
+
+TYPE
+    pass_rec = RECORD    (* USED in the password procedures *)
+      passf    :string[8]; (* Main password file *)
+      backdoor :string[8]; (* Backdoor used in system maintenance *)
+    END;(* TYPE *)
+
+TYPE
+    AttendDataType = RECORD          (* ATTENDANCE RECORD TYPE *)
+       Here_or_Away  : boolean;  (* True for present *)
+       Day,Month,Year: integer;
+    END;
+
+TYPE
+    StudentRectype = RECORD          (* STUDENT RECORD TYPE *)
+
+       S_Number    : Integer;       (* keyfield *)
+       S_Forname   : string[15];    (* student surname *)
+       S_Surname   : string[20];    (* student Forname *)
+       S_PTutor    : string[25];    (* form tutor's  name *)
+       S_GCSEpts   : Integer;       (* GCSE point score *)
+       S_Alevelpts : Integer;
+       S_ClassID   : Integer;       (* keyfield of groupfile, used in linking*)
+       S_attend    : Array[0..Maxattend] of AttendDataTYPE;
+       S_TotAbsent : Integer;
+       S_Totlessons: integer;
+    END;
+
+TYPE
+    GroupRectype = RECORD         (* GROUP FILE *)
+       TS_ClassID   : Integer;    (* Key Field *)
+       TS_ClassName : String[15];
+       TS_TotLessons: Integer;
+    END;
+
+    GroupFile_Type   = FILE OF GroupRectype;
+    StudentFile_Type = FILE OF StudentRectype;
+    Pass_file_type   = FILE OF pass_rec;
+
+VAR      (************* GLOBAL VARIABLES ***************)
+
+   GroupFile         : GroupFile_Type;
+   Groupbuff         : GroupRecType;      (* BUFFER record *)
+   StudentFile       : StudentFile_Type;
+   studentbuff       : StudentRecType;    (* BUFFER record *)
+   groupFileBackup   : GroupFile_Type;    (* FOR Backup Procedure *)
+   StudentFileBackup : StudentFile_Type;  (* FOR Backup Procedure *)
+   AttendNote        : text;       (* text file holding weekly abscences
+                                      given to tutor *)
+   key,count,i       : Integer;    (* "INDEICES" USED THROUGHOUT PROGRAM *)
+   choice            : char;       (* For use in menus or options  *)
+   year,month,day,dow: Word;       (* used in Getdate procedure *)
+   SearchSurname     : String[20]; (* Used in search procedures *)
+   SearchForname     : String[15]; (* Used in search procedures *)
+   SearchNumber      : Integer;    (* Used in search procedures *)
+   SearchClassID     : integer;    (* used in validating classID number *)
+   SearchClassName   :string[15];  (* used in validating class name *)
+   verified          : Boolean;    (*Verification identifier, used throughout*)
+   iocode            : Integer;    (* FOR I/O Checking *)
+   code              : integer;    (* Used in VAL statement *)
+   passfile          : pass_file_type;  (*FOR PASSWORD Protection*)
+   pass_buff         : pass_rec;        (*FOR PASSWORD Protection*)
+   pass              : string[8];       (*FOR PASSWORD Protection*)
+   past              : boolean;         (*FOR PASSWORD Protection*)
+   Pathname          : string;   (* used in assignment of files *)
+   Tsetup            : text;     (* holds the path to data, and to bgi drivers*)
+
+PROCEDURE writexy(x,y :integer;displaytext:STRING);
+(* Outputs a string to screen , to optimize screen output *)
+BEGIN
+     gotoxy(x,y);
+     writeln(displaytext);
+END; (* WRITEXY *)
+
+PROCEDURE WriteCharxy(x,y,ch:byte);
+(* Outputs an ASCII character to screen at position x,y used in *)
+BEGIN
+     gotoxy(x,y);
+     write(chr(ch));
+END;
+
+PROCEDURE AssignFiles;
+(* This procedure not only assigns files but requests user to
+   enter MS DOS paths to files if not already in Tsetup.ini*)
+BEGIN
+     assign(Tsetup,'a:\Tsetup.ini'); (* text file, contains path to
+                                         data files, and bgi graphics file*)
+{$i-}
+     reset(Tsetup);
+     iocode:=ioresult;
+{$i+}
+     IF (iocode<>0) (* if no setup file exists *)
+       THEN
+         BEGIN
+           clrscr;
+           writeln;
+           writeln(' Accrington & Rossendale Attendance System SETUP...');
+           writeln;
+           writeln('   Please specify the drive and directory for data...');
+           writeln('      E.g. c:\reg (Defualt is a:\reg). Stored in text file "setup.ini" line 1');
+           pathname:='';
+           readln(pathname);
+           IF (pathname='') THEN pathname:='a:\reg';
+           rewrite(Tsetup);
+           writeln(Tsetup,pathname);
+           writeln('   Please specify the drive and directory for graphics drivers...');
+           writeln('      E.g. c:\bgi (Defualt is a:\bgi). Stored in text file "setup.ini" line 2');
+           pathname:='';
+           readln(pathname);
+           IF (pathname='') THEN pathname:='a:\bgi';
+           writeln(Tsetup,pathname);
+           close(Tsetup);
+           clrscr;
+         END;
+     reset(Tsetup);
+     read(Tsetup,pathname);
+{$I-}
+     Mkdir(pathname);
+     IOcode:=IOresult;
+{$I+}
+     IF IOcode=0
+       Then
+         BEGIN
+           writeln;
+           writeln('  Creating Directory... ',pathname,' and data files');
+         END; (* IF *)
+     IF IOcode=5
+       Then
+         BEGIN
+           writeln;
+           writeln('  Directory... ',pathname,' already exists !');
+         END; (* IF *)
+     assign(GroupFile,Pathname+'\Group.dat');      (* groupfile *)
+     assign(StudentFile,Pathname+'\Student.dat');  (* student file *)
+     assign(AttendNote,pathname+'\attenote.txt'); (* weekly attendance note*)
+     assign(passfile,'a:\pass.$$$');        (* password file *)
+{$i-}
+     reset(attendnote);  (* check for presence of attendnote file *)
+     iocode:=ioresult;
+{$i+}
+     IF iocode<>0 THEN rewrite(attendnote);
+     close(attendnote);
+{$i-}
+     reset(groupfile);   (* check for presence of groupfile *)
+     iocode:=ioresult;
+{$i+}
+     IF iocode<>0 (* initialises the groupfile, writing dummy records *)
+       THEN
+         BEGIN
+             rewrite(GroupFile);
+             writeln;
+             writeln(' Initialising Group file...');
+             writeln(' IF not first time you used the system, then file is missing.');
+             writexy(5,19,'Progress Indicator (Not a percentage)');
+             FOR count:=0 TO MaxGroups DO
+                BEGIN                (*WRITES DUMMY RECORDS*)
+                   GroupBuff.TS_ClassID:=count;
+                   GroupBuff.TS_ClassName:='';
+                   GroupBuff.TS_TotLessons:=0;
+                   seek(GroupFile,count);
+                   write(GroupFile,GroupBuff);
+                   writecharxy(count+1,21,223);
+                END; (* FOR *)
+             delay(2000);
+         END; (* IF *)
+     close(groupfile);
+{$i-}
+     reset(studentfile); (* check for presence of studentfile *)
+     iocode:=ioresult;
+{$i+}
+     IF iocode<>0  (* initialises the studentfile, writing dummy values *)
+       THEN
+         BEGIN
+              rewrite(StudentFile);
+              gotoxy(1,8);
+              writeln(' Initialising Student file...');
+              writeln(' IF not first time you used the system, then file is missing.');
+              writexy(5,19,'Progress Indicator (Not a percentage)');
+              FOR count:=0 TO numofstudents DO
+                 BEGIN                (*WRITES DUMMY RECORDS*)
+                    WITH StudentBuff DO
+                       BEGIN
+                          S_number:=count;
+                          S_Forname:='';
+                          S_Surname:='';
+                          S_ClassID:=-1;
+                          S_TotLessons:=0;
+                          FOR i:=1 TO Maxattend DO
+                             BEGIN
+                                S_Attend[i].Day:=-1; (* DUMMY VALUE *)
+                             END;
+                          END; (* WITH *)
+                       seek(StudentFile,count);
+                       write(StudentFile,StudentBuff);
+                       writecharxy(count+1,22,223); (*DISPLAYS Progress bar *)
+                 END; (* FOR *)
+              delay(2000);
+         END; (* IF *)
+     close(studentfile);
+     clrscr;
+END; (* AssignFiles *)
+
+FUNCTION Up_CaseStr(s:string):string;  (* Converts a string to upper case *)
+var
+   i,j : integer;
+begin
+   j:=ord(s[0]);
+   FOR i:=1 TO j DO
+       s[i]:=upcase(s[i]);
+     Up_CaseStr:=s;
+END; (* Up_CaseStr *)
+
+PROCEDURE continue(col:word;X,Y:INTEGER;TEXT:STRING);
+(* output a prompt to press return to continue *)
+BEGIN
+     textcolor(col);
+     gotoxy(x,y);
+     writeln('Please Press Return ',TEXT);
+     gotoxy(12,20);
+     textcolor(black);
+     readln;
+END; (* CONTINUE *)
+
+PROCEDURE title;
+(* displays the system title at the top of the screen, with date,
+   used in menus etc.*)
+VAR
+   y,m,d,dow : Word;
+BEGIN
+     textcolor(lightcyan);
+     TEXTBACKGROUND(BLACK);
+     clrscr;
+     GetDate(y,m,d,dow);
+     gotoxy(60,2);
+     Writeln('DATE : ',d:0, '/', m:0, '/', y:0);
+     writexy(7,2,'Accrington & Rossendale College Computer System');
+     writexy(8,3,'For Subject Tutors of `A` Level Groups');
+END; (* TITLE *)
+
+PROCEDURE Linexy(x1,y1,x2,y2,fg,bg,ch :byte);
+(* Outputs a line of ASCII characters to screen as either a vertical or
+   horizontal line *)
+VAR
+   Pos : integer;
+BEGIN
+     textcolor(fg);
+     textbackground(bg);
+     IF x1=x2    (* OUTPUTS VERTICAL LINE OF CHARACTERS *)
+        THEN
+            BEGIN
+                 FOR Pos:=y1 to y2 DO
+                     BEGIN
+                          gotoxy(x1,Pos);
+                          write(chr(ch));
+                     END; (* FOR Pos *)
+            END; (*IF x1=x2*)
+     IF y1=y2    (* OUTPUTS Horizontal LINE OF CHARACTERS *)
+        THEN
+            BEGIN
+                 FOR Pos:=x1 to x2 DO
+                     BEGIN
+                          gotoxy(Pos,y1);
+                          write(chr(ch));
+                     END; (* FOR Pos *)
+            END; (*IF y1=y2*)
+END; (* LINEXY *)
+
+PROCEDURE fastbox(x1,y1,x2,y2,fg,bg : byte);
+(* DRAWS A DOUBLE BOX constructed of ASCII characters*)
+VAR
+   i:byte;
+   s:STRING;
+
+BEGIN
+     textcolor(fg);
+     textbackground(bg);
+     s:=#205;
+     FOR i:= x1+1 TO x2 DO
+         BEGIN
+              gotoxy(i,y1);
+              write(s);
+         END; (* FOR i *)
+     FOR i:=x1+1 TO x2 DO
+         BEGIN
+              gotoxy(i,y2+1);
+              write(s);
+         END; (* FOR i*)
+
+     s:=#186;
+     FOR i:=y1 TO y2 DO
+         BEGIN
+              gotoxy(x1+1,i);
+              write(s);
+         END; (* FOR i *)
+     FOR i:=y1 TO y2 DO
+         BEGIN
+              gotoxy(x2,i);
+              write(s);
+         END; (* FOR i *)
+     s:=#201;
+     gotoxy(x1+1,y1);
+     write(s);
+     s:=#187;
+     gotoxy(x2,y1);
+     write(s);
+     s:=#200;
+     gotoxy(x1+1,y2+1);
+     write(s);
+     s:=#188;
+     gotoxy(x2,y2+1);
+     write(s);
+     textcolor(lightcyan);
+END; (* FASTBOX *)
+
+PROCEDURE intro;
+(* outputs the graphic opening screen *)
+VAR
+ GraphDriver : Integer;
+ GraphMode   : Integer;
+ PathToDriver: String;
+ ErrorCode   : Integer;
+ x,y,yr,xr   : Integer;
+BEGIN
+  reset(Tsetup);
+  readln(Tsetup,pathname);
+  readln(Tsetup,pathname);
+  Pathtodriver:=pathname;
+  REPEAT
+     GraphDriver := Detect;
+     GraphMode:=1;
+     InitGraph(GraphDriver, GraphMode, PathToDriver);
+     ErrorCode:= GraphResult;
+     IF ErrorCode<>grOK
+     THEN
+       BEGIN
+         writeln('Graphics Error : ',GraphErrorMsg(ErrorCode));
+         IF ErrorCode=grFileNotFound (* Can't Find graphics driver/routine *)
+         THEN
+           BEGIN
+             Writeln(' Enter full path to BGI graphics driver : ');
+             Readln(PathToDriver);
+             Writeln;
+           END
+         ELSE
+           BEGIN
+             writeln('Program Aborted!!!!');
+             Halt(1);
+           END;  (* IF *)
+       END; (* IF *)
+  UNTIL ErrorCode = grOK;
+  setcolor(7);
+  setbkcolor(white);
+  x:=50; y:=50; yr:=100; xr:=100;
+  REPEAT
+    x:=x+4;
+    y:=y+2;
+    ellipse(x,y,yr,xr,x,y);
+    yr:=yr+1;
+    xr:=xr+2;
+  UNTIL x>400;
+  SetColor(green);
+  setbkcolor(white);
+  x:=1; y:=20; yr:=50; xr:=50;
+  REPEAT
+    x:=x+4;
+    y:=y+2;
+    ellipse(x,y,yr,xr,x,y);
+    yr:=yr+1;
+    xr:=xr+2;
+  UNTIL x>390;
+  setcolor(green);
+  SetTextJustify(CenterText,CenterText);
+  settextstyle(SansSerifFont,horizdir,5);
+  outtextxy(GetMaxX div 2,165,'Accrington & Rossendale');
+  outtextxy(GetMaxX div 2+1,166,'Accrington & Rossendale');
+  outtextxy(GetMaxX div 2,220,'COLLEGE');
+  outtextxy(GetMaxX div 2+1,221,'COLLEGE');
+  outtextxy(GetMaxX div 2,270,'Tutor`s Organizer');
+  outtextxy(GetMaxX div 2+1,271,'Tutor`s Organizer');
+  SetTextJustify(RightText,BottomText);
+  settextstyle(TriplexFont,horizdir,3);
+  outtextxy(GetmaxX,GetmaxY-70,'Press `RETURN` To Continue...');
+  SetTextJustify(LeftText,BottomText);
+  settextstyle(GothicFont,horizdir,3);
+  outtextxy(10,GetmaxY-10,'By Adrian Pilkington...');
+  readln;
+  cleardevice;
+  closegraph;
+END; (* INTRO *)
+
+           (*THE NEXT 4 PROCEDURES DEAL WITH PASSWORD *)
+
+PROCEDURE P_ENCRYPTION(var inpass:string);
+(* encrypts a password entered by the user, when changing password *)
+VAR
+   i,j,c,totro:integer;
+   count      :integer;
+   table      :array [1..rows,1..cols] of char;
+   newpass    :string[rows*cols];
+BEGIN
+     i:=0;
+     j:=0;
+     count:=0;
+     totro:=rows*cols;
+     CLRSCR;
+     writeln;
+     writeln('CHANGE PASSWORD OPTION : ');
+     writeln('Enter New PassWord (max is as many characters as shown by ".")');
+     for c:=1 to totro do
+         write('.');
+     writeln;
+     readln(newpass);
+     newpass:=concat(newpass,padoutstr);
+     c:=1;
+     FOR i:=1 TO rows DO
+         FOR j:=1 TO cols DO
+           BEGIN
+             table[i,j]:=newpass[c];
+             c:=c+1;
+           END; (* FOR j *)
+     count:=1;
+     FOR j:= 1 TO cols DO
+         BEGIN
+              FOR i:=1 TO rows DO
+                  BEGIN
+                       newpass[count]:=table[i,j];
+                       count:=count+1;
+                  END; (* FOR i *)
+         END; (* FOR j *)
+         inpass:=newpass;
+END;(* P_ENCRYPTION *)
+
+PROCEDURE P_decryption(inputedpass:STRING;VAR newpassword:STRING);
+(* decrypts password *)
+VAR
+   i,j,c,totro:integer;
+   count      :integer;
+   pass       :ARRAY[1..rows*cols] OF char;
+   table      :ARRAY[1..rows,1..cols] OF char;
+
+BEGIN
+     i:=0;
+     j:=0;
+     totro:=rows*cols;
+     count:=1;
+     FOR j:=1 TO cols DO
+         BEGIN
+              FOR i:=1 TO rows DO
+                  BEGIN
+                       table[i,j]:=inputedpass[count];
+                       inc(count);
+                  END; (* FOR i *)
+         END; (* FOR j *)
+     count:=1;
+     FOR i:= 1 TO rows DO
+        BEGIN
+           FOR j:= 1 TO cols DO
+               BEGIN
+                    pass[count]:=table[i,j];
+                    inc(count);
+               END; (* FOR j *)
+        END; (* FOR i *)
+        newpassword:=pass;
+END; (* P_DECRYPTION *)
+
+PROCEDURE SP53_ChangePassword; (* prompts for new password, encrypts and then
+                               writes to disk*)
+VAR
+password:STRING;
+
+BEGIN
+    reset(passfile);
+    clrscr;
+    P_ENCRYPTION(password);
+    WITH pass_buff DO
+         BEGIN
+           passf:=password;      (* new password *)
+           write(passfile,pass_buff);
+         END;
+    close(passfile);
+END;(* Change Password *)
+
+PROCEDURE P_pss; (* prompts for user password compares with password on disk*)
+VAR
+count             : integer;
+decryptedpass     : STRING;
+decryptedbackdoor : STRING;
+chancesleft       : integer;
+
+BEGIN
+     CLRSCR;
+     assign(passfile,'a:\Pass.$$$');
+     {$i-}
+       reset(passfile);  (* checks to see if password file exists *)
+       iocode:=ioresult;
+     {$i+}
+     IF (iocode IN [1..3]) (*ONLY RUN FIRST TIME OR WHEN PASSFILE IS CORRUPTED*)
+        THEN
+            BEGIN
+                  WRITELN('WARNING : Password file has become corrupted, reset to default');
+                  delay(500);
+                  rewrite(passfile);
+                  WITH pass_buff DO
+                       BEGIN
+                            passf:='pwaosrsd';
+                            backdoor:='msy.s.y.';
+                            write(passfile,pass_buff);
+                       END; (* WITH *)
+                  close(passfile);
+            END;(* IF *)
+     count:=0;
+     past:=false;
+     chancesleft:=2;
+     reset(passfile);
+     read(passfile,pass_buff);
+     REPEAT
+           clrscr;
+           fastbox(20,6,59,16,lightblue,black);
+           textcolor(lightcyan);
+           textbackground(black);
+           writexy(23,7,'PASSWORD PROTECTION BY A PILKINGTON');
+           writexy(26,9,'Enter Password : ');
+           gotoxy(45,9);
+           textcolor(black);
+           textbackground(black);
+           readln(pass);
+           pass:=concat(pass,padoutstr);
+           P_decryption(pass_buff.passf,decryptedpass);
+           P_decryption(pass_buff.backdoor,decryptedbackdoor);
+           IF (pass<>decryptedpass) AND (pass<>decryptedbackdoor)
+              THEN
+                  BEGIN
+                       writeln;
+                       textcolor(lightcyan);
+                       textbackground(black);
+                       writexy(23,11,'THE PASSWORD IS INVALID');
+                       gotoxy(23,12);
+                       writeln('  YOU HAVE ',chancesleft,' CHANCE(S) LEFT...');
+                       writexy(23,14,'    PLEASE WAIT...');
+                       delay(1000);
+                  END; (* IF *)
+           IF (pass=decryptedpass) OR (pass=decryptedbackdoor)
+              THEN
+                  BEGIN
+                       past:=true;
+                       writeln;
+                       textbackground(black);
+                       textcolor(lightcyan);
+                       writexy(23,11,'PASSWORD VALID: USER ACCESS GRANTED');
+                       writexy(23,13,'                PLEASE WAIT...');
+                       delay(1000);
+                  END;
+           dec(chancesleft);
+           inc(count);
+     UNTIL (pass=decryptedpass) OR (count=3) OR (pass=decryptedbackdoor);
+     close(passfile);
+     clrscr;
+END;(* P_PSS *)
+(************************ END OF PASSWORD PROCEDURES ***********************)
+
+PROCEDURE S51_InitialiseFiles;
+(* initialises files totally - including initialising dummy values *)
+BEGIN
+     title;
+     writeln;
+     writeln;
+     write('INITIALISE FILES... ');
+     textcolor(lightred+blink);
+     writeln(' WARNING : ALL DATA WILL BE LOST');
+     textcolor(lightcyan);
+     writeln;
+     write('Initialise Group File (y/n)   => ');
+     choice:='n';
+     readln(choice);
+     IF choice='y'
+        THEN
+           BEGIN
+             rewrite(GroupFile);
+             FOR count:=0 TO MaxGroups DO
+                BEGIN                (*WRITES DUMMY RECORDS*)
+                   GroupBuff.TS_ClassID:=count;
+                   GroupBuff.TS_ClassName:='';
+                   GroupBuff.TS_TotLessons:=0;
+                   seek(GroupFile,count);
+                   write(GroupFile,GroupBuff);
+                   writecharxy(count+1,9,223);
+                END; (* FOR *)
+             close(GroupFile);
+             textcolor(lightcyan);
+             writeln('  FILE INITIALISED !');
+           END
+        ELSE
+           BEGIN
+              writeln('  FILE NOT INITIALISED !');
+           END; (* IF THEN ELSE *)
+     writeln;
+     write('Initialise Student File (y/n) => ');
+     choice:='n';
+     readln(choice);
+     IF choice='y'
+        THEN
+           BEGIN
+              rewrite(StudentFile);
+              textcolor(lightcyan);
+              FOR count:=0 TO numofstudents DO
+                 BEGIN                (*WRITES DUMMY RECORDS*)
+                    WITH StudentBuff DO
+                       BEGIN
+                          S_number:=count;
+                          S_Forname:='';
+                          S_Surname:='';
+                          S_ClassID:=-1;
+                          S_TotLessons:=0;
+                          FOR i:=1 TO Maxattend DO
+                             BEGIN
+                                S_Attend[i].Day:=-1; (* DUMMY VALUE *)
+                             END;
+                          END; (* WITH *)
+                       seek(StudentFile,count);
+                       write(StudentFile,StudentBuff);
+                       writecharxy(count+1,13,223); (*DISPLAYS Progress bar *)
+                 END; (* FOR *)
+                 Writeln('  FILE INITIALISED !');
+                 close(StudentFile);
+           END
+        ELSE
+           BEGIN
+              writeln('  FILE NOT INITIALISED !');
+           END; (* IF THEN ELSE *)
+     continue(yellow,30,20,'');
+END; (* S51_InitialiseFiles *)
+
+PROCEDURE S52_SysBackup;
+(* performs a complete backup of main data files, group.dat, student.dat *)
+VAR
+  BackupFileExtension: string[3];
+  s                  : string[3];
+  BackupFileExtenNum : integer;
+  newfileFlag        : boolean;
+
+BEGIN
+     newfileFlag:=false;
+     clrscr;
+     writeln;
+     writeln(' The main data files will now be copyied to a:\backup');
+     reset(groupfile);
+     reset(studentfile);
+{$I-}
+     Mkdir('a:\Backup');
+     IOcode:=IOresult;
+{$I+}
+     IF IOcode=0
+       Then
+         BEGIN
+           writeln;
+           writeln('  Creating Directry... a:\backup');
+         END; (* IF *)
+     IF IOcode=5
+       Then
+         BEGIN
+           writeln;
+           writeln('  Found backup directry... a:\backup');
+         END; (* IF *)
+     BackupFileExtenNum:=0;
+     while (newfileFlag<>true) and      (* identify backup set, i.e extansion *)
+           (BackupFileExtenNum<=maxbackups) DO
+        BEGIN
+             inc(BackupFileExtenNum);
+             Str(BackupFileExtenNum,BackupFileExtension);
+
+             S:='000';
+             Insert(BackupFileExtension,S , 3);
+             BackupFileExtension:=s;
+
+             (* Str : converts a numeric value to string *)
+             assign(groupFileBackup,'a:\backup\Group.'+BackupFileExtension);
+             assign(StudentFileBackup,'a:\backup\Student.'+BackupFileExtension);
+{$I-}
+             reset(groupFileBackup);
+             IOcode:=IOresult;
+{$I+}
+             IF IOcode<>0
+             then
+               BEGIN
+                  rewrite(groupFileBackup);
+                  rewrite(StudentFileBackup);
+                  newfileFlag:=true;
+               END; (* IF *)
+             IF IOcode=0 then close(groupFileBackup);
+             IF BackupFileExtenNum>maxbackups
+               THEN
+                 BEGIN
+                   writeln;
+                   writeln('  Error, Maximum number of backups has been exceeded !');
+                   writeln('         You must delete the oldest backup files (From Dos)');
+                   writeln;
+                   writeln(' Press Return to continue...');
+                   readln;
+                 END; (* IF *)
+        END; (* WHILE *)
+     IF newfileFlag=true
+       THEN
+         BEGIN
+           reset(studentfileBackup);
+           reset(groupfilebackup);
+           writeln;
+           writeln('  Backup file names are : Group.',BackupFileExtension);
+           writeln('                        : Student.',BackupFileExtension);
+           FOR count:=0 TO MaxGroups DO
+              BEGIN
+                read(groupfile,groupbuff);
+                write(GroupFileBackup,GroupBuff);
+                writecharxy(count+1,19,223);  (*DISPLAYS Progress bar *)
+              END; (* FOR *)
+           FOR count:=0 TO numofstudents DO
+              BEGIN
+                read(Studentfile,studentbuff);
+                write(StudentFileBackup,StudentBuff);
+                writecharxy(count+1,20,223); (*DISPLAYS Progress bar *)
+              END; (* FOR *)
+           close(studentfile);
+           close(GroupFile);
+           close(studentfileBackup);
+           close(GroupFileBackup);
+         writexy(10,22,'Backup Complete...');
+         continue(yellow,50,22,'...');
+        END; (* IF *)
+END; (* S52_SysBackup *)
+
+PROCEDURE S54_SetSystemDate;
+(* sets the O/S date *)
+VAR
+   tempday  : string[2]; (* used in validation *)
+   tempmonth: string[2]; (* used in validation *)
+   tempyear : string[4]; (* used in validation *)
+   day,month,year : word;
+   code     : integer;   (* used in val statement *)
+BEGIN
+   title;
+   fastbox(1,1,79,24,red,black);
+   writexy(5,5,'*** SET SYSTEM DATE...');
+   writexy(10,7,'Enter new date... (Press "x" to exit.)');
+   writexy(15,9,'Day....:');
+   writexy(15,10,'Month..:');
+   writexy(15,11,'Year...:');
+   repeat
+      gotoxy(25,9);
+      readln(tempday);
+      code:=0;
+      val(tempday,day,code);
+   until (day in [1..31]) or (tempday='x');
+   repeat
+      gotoxy(25,10);
+      readln(tempmonth);
+      code:=0;
+      val(tempmonth,month,code);
+   until (month in [1..12]) or (tempmonth='x');
+   repeat
+      gotoxy(25,11);
+      readln(tempyear);
+      code:=0;
+      val(tempyear,year,code);
+   until ((year>=1980) and (year<=2099)) or (tempyear='x');
+   setdate(year,month,day);
+   continue(yellow+blink,10,20,'');
+END; (* S54_ChangeSystemDate *)
+
+(************************ END OF SETUP PROCEDURES **************************)
+
+(******************** STUDENT PROCEDURES PREFIXED "S" **********************)
+PROCEDURE StudentTable;
+(* outputs to screen the universal input/output screen for student details*)
+BEGIN
+     TITLE;
+     fastbox(1,1,79,24,cyan,black);
+     fastbox(9,7,65,13,blue,black);
+     linexy(10,12,65,12,blue,black,205);
+     linexy(10,10,65,10,blue,black,205);
+     textcolor(blue);
+     writecharxy(44,7,203);
+     writecharxy(44,8,186);
+     writecharxy(44,9,186);
+     writecharxy(44,10,202);
+     writecharxy(65,10,185);
+     WriteCharxy(10,10,204);
+     WriteCharxy(44,10,202);
+     WriteCharxy(10,12,204);
+     WriteCharxy(65,12,185);
+     WriteCharxy(35,11,186);
+     WriteCharxy(35,10,203);
+     WriteCharxy(35,12,202);
+     textcolor(lightcyan);
+     writexy(12,8,'Forname: [...............]');
+     writexy(12,9,'Surname: [....................]');
+     writexy(46,8,'Class ID No. : [..]');
+     writexy(46,9,'(See List 1)');
+     writexy(12,11,'GCSE Point Score: [..]');
+     writexy(37,11,'A Level Point Score  : [..]');
+     writexy(12,13,'Tutor`s Name: [.........................]');
+END; (* StudentTable *)
+
+PROCEDURE AllocateStudent(VAR verified:boolean);
+(* finds next free space on student file *)
+BEGIN
+     reset(StudentFile);
+     key:=-1;
+     REPEAT
+         Key:=key+1;
+         Seek(Studentfile, key);
+         Read(Studentfile, Studentbuff);
+         IF Studentbuff.S_Surname = ''
+            THEN
+                BEGIN
+                     verified:=false; (* FOUND NEXT FREE SPACE ON FILE *)
+                END; (* IF *)
+         IF (SearchSurname = Studentbuff.S_Surname) and
+            (SearchForname = Studentbuff.S_Forname)
+               THEN
+                   BEGIN
+                        verified:=true; (* RECORD ALREADY EXISTS *)
+                   END; (* IF *)
+     UNTIL (key=numofstudents) or
+           ((SearchSurname = Studentbuff.S_Surname) and
+           (SearchForname = Studentbuff.S_Forname)) or
+           (Studentbuff.S_Surname = '');
+END; (* AllocateStudent *)
+
+PROCEDURE SearchStudent(VAR verified:boolean);
+(* searchs through whole student file to find the student requested
+   either by 1) Surname only, or 2) Surname and Forname *)
+BEGIN
+ Key:=-1;
+ Reset(Studentfile);
+ Verified:=false;
+ IF choice='1'
+  THEN
+   BEGIN
+        REPEAT
+            Key:=key+1;
+            Seek(Studentfile, key);
+            Read(Studentfile, Studentbuff);
+            IF (SearchSurname = Studentbuff.S_Surname)
+                 THEN
+                     BEGIN
+                          verified:=true;
+                     END; (* IF *)
+            IF (Studentbuff.S_Surname= '')
+              THEN
+                  BEGIN
+                       verified:=false;
+                  END; (* IF *)
+        UNTIL (key=numofstudents) or
+              (SearchSurname = Studentbuff.S_Surname)
+   END; (* IF *)
+ IF choice='2'
+  THEN
+   BEGIN
+        REPEAT
+            key:=key+1;
+            Seek(Studentfile, key);
+            Read(Studentfile, Studentbuff);
+            IF (SearchSurname = Studentbuff.S_Surname) and
+               (SearchForname = Studentbuff.S_Forname)
+                 THEN
+                     BEGIN
+                          verified:=true;
+                     END; (* IF *)
+            IF (Studentbuff.S_Surname= '')
+              THEN
+                  BEGIN
+                       verified:=false;
+                  END; (* IF *)
+        UNTIL (key=numofstudents) or
+              ((SearchSurname = Studentbuff.S_Surname) and
+              (SearchForname = Studentbuff.S_Forname))
+   END; (* IF *)
+END; (* SearchStudent *)
+
+PROCEDURE SearchIdentifier; (* Preeceds search for student, prompts for name*)
+BEGIN
+   REPEAT
+     title;
+     fastbox(1,1,79,24,cyan,black);
+     writexy(6,4,'Search for a Student...');
+     writexy(6,6,'Enter Number 1 or 2 from below :');
+     writexy(10,8,'(1) Find student by surname (ONLY if no other with same surname ... ');
+     writexy(10,9,'(2) Find student surname and forname...');
+     gotoxy(10,10);
+     readln(choice);
+   UNTIL (choice IN ['1'..'2']);
+   If choice='1'
+      THEN
+        BEGIN
+           title;
+           fastbox(1,1,79,24,cyan,black);
+           writexy(4,7,'Enter Surname of Student to Be Found  : ....................');
+           gotoxy(44,7);
+           readln(SearchSurname);
+           SearchSurname:=Up_CaseStr(SearchSurname);
+           SearchStudent(verified);
+        END; (* IF *)
+   IF choice='2'
+      THEN
+        BEGIN
+           Clrscr;
+           writexy(4,7,'Enter Forname of Student to Be Found  : ...............');
+           gotoxy(44,7);
+           readln(SearchForname);
+           writexy(4,9,'Enter Surname of Student to Be Found  : ....................');
+           gotoxy(44,9);
+           readln(SearchSurname);
+           SearchSurname:=Up_CaseStr(SearchSurname);
+           SearchStudent(verified);
+        END;
+END; (* SearchIdentifier *)
+
+PROCEDURE VerifyClassID(key:integer;var tempgroupname:string);
+(* Called by S11_AddStudent, to verify the classID number specified by user *)
+BEGIN
+ Reset(GroupFile);
+ Verified:=false;
+ Seek(GroupFile, key);
+ Read(GroupFile, GroupBuff);
+ IF Groupbuff.TS_ClassName<>''
+   THEN
+     BEGIN
+        verified:=true;
+        TempGroupName:=GroupBuff.TS_ClassName;
+     END; (* IF *)
+END; (* VerifyClassID *)
+
+PROCEDURE S11_AddStudent;
+(* validates and verifies student details and then writes to first
+   free space on the student file (By calling AllocateStudent)*)
+VAR
+   AddAnother: Boolean;
+   Forname   : string[15];
+   Surname   : string[20];
+   PTutor    : string[25];
+   GCSEpts   : string[3];  (* used in validating *)
+   Alevelpts : string[3];  (* used in validating *)
+   GCSEpts2  : Integer;    (* used in validating *)
+   AlevelPts2: Integer;    (* used in validating *)
+   ClassID   : string[2];  (* used in validating *)
+   ClassID2  : integer;    (* used in validating *)
+   TpGrpName : string;
+
+BEGIN
+     Key:=0;
+     Textcolor(lightcyan);
+     reset(studentfile);
+     reset(groupfile);
+     while (not eof(groupfile)) and (groupbuff.TS_ClassName='') do
+       BEGIN
+         read(groupfile,groupbuff);
+       END;
+     IF groupbuff.TS_ClassName=''
+     THEN
+       BEGIN
+         textcolor(yellow+blink);
+         writexy(4,21,'Must have one or more Group record(s) before you can enter students.');
+         writexy(4,22,'Press Return to continue...');
+         readln;
+       END
+     Else
+       Begin
+         REPEAT
+           StudentTable;
+           writexy(4,5,'*** Student Data Entry...');
+           reset(StudentFile);
+           repeat
+             gotoxy(22,8);
+             readln(Forname);
+           until Forname<>''; (* PRESENCE CHECK *)
+           repeat
+             gotoxy(22,9);
+             readln(Surname);
+             Surname:=Up_CaseStr(Surname);  (* Convert to upper case *)
+           until surname<>'';               (* PRESENCE CHECK *)
+           repeat   (* VALIDATION OF CLASS ID number, checks groupfile *)
+             gotoxy(62,8);
+             readln(ClassID);
+             val(ClassID,ClassID2,code);
+             SearchClassID:=ClassID2;
+             IF classID2 in [0..maxgroups] THEN VerifyClassID(ClassID2,TpGrpName);
+             if (code<>0) or (not verified)
+               then
+                 begin
+                    textcolor(yellow);
+                    writexy(10,21,'Invalid class ID number, redo. Press return to continue');
+                    readln;
+                    linexy(10,21,65,21,black,black,196);
+                    textcolor(lightcyan);
+                    writexy(61,8,'[..]');
+                 end;
+           until (verified) and (code=0);
+           close(GroupFile);
+           repeat
+             gotoxy(31,11);
+             readln(GCSEpts);
+             val(GCSEpts,GCSEpts2,code);
+             if (code<>0) or (GCSEpts2<0) or (GCSEpts2>=100)
+               then
+                 begin
+                    textcolor(yellow);
+                    writexy(10,21,'Invalid GCSE point score, redo. Press return to continue');
+                    readln;
+                    linexy(10,21,65,21,black,black,196);
+                    textcolor(lightcyan);
+                    writexy(30,11,'[..]');
+                 end;
+           until (GCSEpts2>=0) and (GCSEpts2<100) and (code=0);
+           repeat
+             gotoxy(61,11);
+             readln(AlevelPts);
+             val(AlevelPts,AlevelPts2,code);
+             if (code<>0) or (AlevelPts2<0) or (AlevelPts2>=100)
+               then
+                 begin
+                    textcolor(yellow);
+                    writexy(11,21,'Invalid A Level point score, redo. Press return to continue');
+                    readln;
+                    linexy(10,21,70,21,black,black,196);
+                    textcolor(lightcyan);
+                    writexy(60,11,'[..]');
+                 end;
+           until (AlevelPts2>=0) and (AlevelPts2<100) and (code=0);
+           gotoxy(27,13);
+           readln(PTutor);
+           SearchSurname:=Up_caseStr(Surname);
+           SearchForname:=Forname;
+           AllocateStudent(verified); (* finds next free space on student file *)
+           IF NOT verified (* i.e. if student does not already exist *)
+                THEN
+                    BEGIN
+                       WITH StudentBuff DO
+                           BEGIN
+                                S_Forname:=Forname;
+                                S_Surname:=Surname;
+                                S_PTutor:=PTutor;
+                                S_GCSEpts:=GCSEpts2;
+                                S_Alevelpts:=Alevelpts2;
+                                S_Number:=key;
+                                S_ClassID:=ClassID2;
+                                S_TotAbsent:=0;
+                                S_Totlessons:=0;
+                                FOR count:=1 TO MaxAttend DO
+                                  BEGIN
+                                    WITH S_ATTEND[count] DO
+                                      BEGIN
+                                           here_or_away:=false;
+                                           day:=-1;
+                                           Month:=0;
+                                           Year:=0;
+                                      END; (* WITH *)
+                                  END; (* FOR i *)
+                           END; (* WITH *)
+                      gotoxy(10,15);
+                      writeln('Class ID entered refers to group : ',TpGrpName);
+                      writexy(10,17,'Do you wish to ADD the above to FILE ? (y/n)');
+                      choice:='n';
+                      gotoxy(55,17);
+                      readln(choice);
+                      IF choice='y'
+                         THEN
+                             BEGIN
+                                  seek(Studentfile,key);
+                                  write(studentfile,studentbuff);
+                             END; (* IF *)
+                    END
+                ELSE
+                    BEGIN
+                      IF (key=numofstudents)
+                      THEN
+                       BEGIN
+                        writexy(5,18,'Maximum Record Limit Exceeded (Contact Technical Support)');
+                       END
+                      ELSE
+                       BEGIN
+                        writexy(5,17,'The Student is ALREADY on FILE!, File write ABORTED!');
+                       END; (* IF THEN ELSE *)
+                    END; (* IF THEN ELSE *)
+                Writexy(10,20,'Create Another Student Record ? (y/n)');
+                choice:='n';
+                gotoxy(55,20);
+                readln(choice);
+                AddAnother:=false;
+                IF choice='y' THEN AddAnother:=true;
+         UNTIL Not AddAnother;
+         close(StudentFile);
+     END; (* IF then Else *)
+END; (* S14_AddStudent *)
+
+PROCEDURE S12_EditStudRec;
+(* edits a student record and writes to disk *)
+VAR
+   EditAnother    : Boolean;
+   TempS_Forname  : String[15];
+   TempS_Surname  : String[20];
+   TempS_ClassID  : String[2];
+   TempS_GCSEpts  : String[2];
+   TempS_AlevelPts: String[2];
+   TempS_PTutor   : String[25];
+
+BEGIN
+     REPEAT
+           reset(StudentFile);
+           clrscr;
+           SearchIdentifier; (* GOES TO SEARCH, EVENTUALLY *)
+           IF verified
+             THEN
+               BEGIN
+                 StudentTable;
+                 writexy(4,5,'*** Student Data Edit...');
+                 writexy(30,5,'To Edit navigate Table by pressing <Return>...');
+                 WITH Studentbuff do
+                   BEGIN
+                     gotoxy(22,8);
+                     readln(TempS_Forname);
+                     IF TempS_Forname<>''
+                        THEN S_Forname:=TempS_Forname;
+                     gotoxy(22,9);
+                     readln(TempS_Surname);
+                     IF TempS_Surname<>''
+                        THEN S_Surname:=Up_CaseStr(TempS_Surname);
+                     gotoxy(62,8);
+                     readln(TempS_ClassID);
+                     IF TempS_ClassID<>''
+                        THEN val(TempS_ClassID,S_ClassID,i);
+                     gotoxy(31,11);
+                     readln(TempS_GCSEpts);
+                     IF TempS_GCSEpts<>''
+                        THEN val(TempS_GCSEpts,S_GCSEpts,i);
+                     gotoxy(61,11);
+                     readln(TempS_AlevelPts);
+                     IF TempS_Alevelpts<>''
+                        THEN val(TempS_Alevelpts,S_Alevelpts,i);
+                     gotoxy(27,13);
+                     readln(TempS_PTutor);
+                     IF TempS_PTutor<>''
+                        THEN S_PTutor:=TempS_PTutor;
+                     writexy(8,17,'Do you wish to Update the above to FILE ? (y/n)');
+                     gotoxy(55,17);
+                     readln(choice);
+                     IF choice='y'
+                        THEN
+                            BEGIN
+                               seek(Studentfile,key);
+                               write(studentfile,studentbuff);
+                          END; (* IF *)
+                   END; (*WITH *)
+                   Writexy(8,19,'Edit Another Student Record ? (y/n)');
+                   choice:='n';
+                   gotoxy(55,19);
+                   readln(choice);
+                   EditAnother:=false;
+                   IF choice='y' THEN EditAnother:=true;
+               END
+             ELSE
+              IF NOT verified
+               THEN
+                 BEGIN
+                      writexy(10,13,'The Student You Requested is NOT on FILE');
+                      continue(yellow,10,14,'');
+                      EditAnother:=False;
+                 END; (* IF THEN ELSE *)
+     UNTIL EditAnother=false;
+     close(StudentFile);
+END; (* S12_EditStudRec *)
+
+PROCEDURE S13_Deletestudent;
+(* deletes a student record, and replaces dummy values *)
+BEGIN
+     SearchIdentifier; (* GOES TO SEARCH, EVENTUALLY *)
+     IF VERIFIED
+        THEN
+            BEGIN
+                 title;
+                 fastbox(1,1,79,24,cyan,black);
+                 writexy(5,6,'Do you REALLY want to Delete THIS record (y/n) ?');
+                 gotoxy(55,6);
+                 readln(choice);
+                 IF choice='y'
+                    THEN
+                        BEGIN
+                             seek(StudentFile,key);
+                             read(StudentFile,StudentBuff);
+                             WITH StudentBuff DO
+                               BEGIN
+                                 S_number:=key;
+                                 S_Forname:='';
+                                 S_Surname:='';
+                                 S_ClassID:=-2;
+(*ClassID : note dummy value differs to initialised value, used in printing *)
+                                 S_TotLessons:=0;
+                                 S_PTutor:='';
+                                 FOR i:=1 TO Maxattend DO
+                                   BEGIN
+                                     S_Attend[i].Day:=-1; (* DUMMY VALUE *)
+                                   END;
+                             END; (* WITH *)
+                             seek(StudentFile,key);
+                             write(StudentFile,StudentBuff);
+                             writexy(5,8,'RECORD DELETED!');
+                             continue(yellow,5,10,'');
+                        END
+                    ELSE
+                        BEGIN
+                             writexy(5,8,'RECORD ON FILE NOT DELETED!');
+                             continue(yellow,5,10,'');
+                        END; (* IF THEN ELSE *)
+            END; (* IF *)
+     If not verified
+       THEN
+         BEGIN
+           writexy(5,8,'The Student You Requested is NOT on FILE');
+           continue(yellow,5,10,'');
+         END;
+     close(StudentFile);
+END; (* S13_Deletestudent *)
+
+PROCEDURE S14_ViewStudent;
+(* Outputs student details to screen, excluding any attendance *)
+VAR
+   ViewAnother : Boolean;
+BEGIN
+     REPEAT
+           reset(StudentFile);
+           clrscr;
+           textcolor(lightcyan);
+           SearchIdentifier; (* GOES TO SEARCH, EVENTUALLY *)
+           IF verified
+             THEN
+               BEGIN
+                 StudentTable;
+                 writexy(4,5,'*** Student Data View...');
+                 WITH Studentbuff do
+                   BEGIN
+                     gotoxy(22,8);
+                     writeln(S_Forname);
+                     gotoxy(22,9);
+                     writeln(S_Surname);
+                     gotoxy(62,8);
+                     writeln(S_ClassID);
+                     gotoxy(31,11);
+                     writeln(S_GCSEpts);
+                     gotoxy(61,11);
+                     writeln(S_AlevelPts);
+                     gotoxy(27,13);
+                     writeln(S_PTutor);
+                   END; (* WITH *)
+                   Writexy(10,19,'View Another Student Record ? (y/n)');
+                   choice:='n';
+                   gotoxy(55,19);
+                   readln(choice);
+                   ViewAnother:=false;
+                   IF choice='y' THEN ViewAnother:=true;
+               END
+           ELSE
+             IF NOT verified
+               THEN
+                 BEGIN
+                      writexy(10,13,'The Student You Requested is NOT on FILE');
+                      continue(yellow,10,14,'');
+                      ViewAnother:=False;
+                 END; (* IF THEN ELSE *)
+     UNTIL ViewAnother=false;
+     close(StudentFile);
+END; (* S15_ViewStudent *)
+(************************* END OF STUDENT PROCEDURES ************************)
+
+
+(********************  GROUP  PROCEDURES PREFIXED "G"   *********************)
+PROCEDURE AllocateGroup(VAR verified:boolean);
+(* finds next free space on the group file, stored in "key" *)
+BEGIN
+     reset(GroupFile);
+     Verified:=false;
+     key:=-1;
+     REPEAT
+         Key:=key+1;
+         Seek(GroupFile, key);
+         Read(GroupFile, Groupbuff);
+         IF GroupBuff.TS_ClassName = ''
+            THEN
+                BEGIN
+                     verified:=false;
+                END; (* IF *)
+         IF (SearchClassName = Groupbuff.TS_ClassName)
+           THEN
+               BEGIN
+                    verified:=true;
+               END; (* IF *)
+       UNTIL (key=MaxGroups) or
+             (SearchClassName = Groupbuff.TS_ClassName) or
+             (GroupBuff.TS_ClassName = '');
+END; (* AllocateGroup *)
+
+PROCEDURE SearchGroup(VAR verified:boolean);
+(* finds group, or reports error if not on file *)
+BEGIN
+ Key:=-1;
+ Reset(GroupFile);
+ Verified:=false;
+ REPEAT
+       Key:=key+1;
+       Seek(GroupFile, key);
+       Read(GroupFile, GroupBuff);
+       IF (SearchClassName = GroupBuff.TS_ClassName)
+          THEN
+              BEGIN
+                   verified:=true;
+              END; (* IF *)
+       IF (Groupbuff.TS_ClassName='')
+          THEN
+              BEGIN
+                   verified:=false;
+              END; (* IF *)
+ UNTIL (SearchClassName = GroupBuff.TS_ClassName) or
+       (Key=maxgroups)
+END; (* SearchGroup *)
+
+PROCEDURE SpecifyGroup; (* Preceeds  SEARCHGROUP *)
+Var
+  TempClassID   : string;
+  Searchtype    :integer;
+  TempSearchtype: string;
+BEGIN
+     REPEAT
+           REPEAT
+             clrscr;
+             writeln;
+             Writeln('  Specify Group...');
+             writeln;
+             writeln('  Enter : (1) Search By Class Name, (2) Search By Class ID No ?');
+             readln(TempSearchtype);
+             val(TempSearchtype,Searchtype,code);
+           UNTIL (Searchtype in [1..2]);
+           IF Searchtype=1
+             THEN
+               BEGIN
+                  clrscr;
+                  writexy(4,5,'Enter Group Name : ...............');
+                  gotoxy(23,5);
+                  readln(SearchClassName);
+                  SearchClassName:=Up_CaseStr(SearchClassName);
+                  SearchGroup(verified);
+                  IF NOT verified
+                    THEN
+                      BEGIN
+                         writexy(6,6,'The Group You Specified is NOT on FILE');
+                         writexy(6,8,'Do you wish to try again (y/n) ?');
+                         readln(choice);
+                      END; (* IF *)
+               END; (* IF *)
+           IF Searchtype=2
+             THEN
+               BEGIN
+                  clrscr;
+                  REPEAT
+                    writexy(4,5,'Enter Group ID (See list 1) : .');
+                    gotoxy(34,5);
+                    readln(TempClassID);
+                    val(TempclassID,SearchClassID,code);
+                  UNTIL (SearchClassID>=0) and (code=0);
+                  Verified:=false;
+                  IF (SearchClassID in [0..MaxGroups])  (* FIND GROUP *)
+                    THEN
+                      BEGIN
+                         Reset(GroupFile);
+                         Seek(GroupFile, SearchClassID);
+                         Read(GroupFile, GroupBuff);
+                         IF Groupbuff.TS_ClassName<>''
+                           THEN
+                             BEGIN
+                               SearchClassName:=GroupBuff.TS_ClassName;
+                               key:=SearchClassID;
+                               verified:=true;
+                             END; (* IF *)
+                      END; (* IF *)
+                  IF NOT verified
+                    THEN
+                      BEGIN
+                         writexy(6,6,'The Group You Specified is NOT on FILE');
+                         writexy(6,8,'Do you wish to try again (y/n) ?');
+                         readln(choice);
+                      END; (* IF *)
+               END; (* IF *)
+     UNTIL (verified=true) or (choice='n');
+END; (* Specifygroup *)
+
+PROCEDURE G11_CreateGroupRecord; (* adds a group to groupfile,
+                                    checks if already exists *)
+VAR
+   AddAnother : Boolean;
+   c          : string;
+   TempGrpName: string[15];
+BEGIN
+     REPEAT
+           Title;
+           fastbox(1,1,79,24,cyan,black);
+           writexy(5,5,'* * * D A T A  E N T R Y : G R O U P  R E C O R D S . . .');
+           fastbox(4,7,61,8,blue,black);
+           textcolor(blue);
+           WriteCharxy(35,7,203);
+           WriteCharxy(35,8,186);
+           WriteCharxy(35,9,202);
+           textcolor(lightcyan);
+           writexy(6,8,'Group Name : ................');
+           writexy(37,8,'Allocated Group ID : ..');
+           reset(GroupFile);
+           gotoxy(19,8);
+           Readln(TempGrpname);
+           SearchClassName:=Up_CaseStr(TempGrpname);
+           AllocateGroup(verified);
+           IF (NOT verified) and (Key<=MaxGroups)
+              THEN
+                  BEGIN
+                       seek(groupFile, Key);
+                       read(GroupFile, GroupBuff);
+                       GroupBuff.TS_ClassName:=Up_CaseStr(TempGrpname);
+                       GroupBuff.TS_ClassID:=Key;
+                       gotoxy(58,8);
+                       writeln(key);
+                       gotoxy(10,17);
+                       writeln('Do you wish to ADD the above to FILE ? (y/n)');
+                       gotoxy(55,17);
+                       readln(c);
+                       IF c='y'
+                         THEN
+                             BEGIN
+                                  seek(GroupFile, Key);
+                                  write(GroupFile, GroupBuff);
+                             END; (* IF *)
+                  END; (* IF *)
+           IF verified
+              THEN
+                  BEGIN
+                       writexy(10,18,'The Group is ALREADY EXISTS, File write ABORTED!');
+                  END; (* if *)
+           IF Key>=MaxGroups
+              THEN
+                  BEGIN
+                       writexy(10,18,'The maximum Group limit reached, File write ABORTED!');
+                  END; (* IF *)
+           Writexy(10,20,'Create Another Group Record ? (y/n)');
+           choice:='n';
+           gotoxy(55,20);
+           readln(choice);
+           AddAnother:=false;
+           IF choice='y' THEN AddAnother:=true;
+     UNTIL Not AddAnother;
+     Close(GroupFile);
+END; (* G11_ CreateGroupRecord *)
+
+PROCEDURE G12_ViewGroups; (* Output group list to screen, A K A List 1 *)
+VAR
+   y: integer;
+BEGIN
+     title;
+     fastbox(1,1,79,24,cyan,black);
+     writexy(5,5,'* * * DATA VIEW : GROUP RECORDS... (List 1)');
+     writexy(10,7,'Class Name    Total Lessons    ClassID No.');
+     reset(GroupFile);
+     y:=0;
+     read(groupfile, groupbuff);
+     While (not eof (groupfile)) DO
+       BEGIN
+         inc(y);
+         With groupbuff Do
+           Begin
+             gotoxy(6,y+7);
+             writeln(TS_ClassName:16,'    ',TS_TotLessons:5,'           ',TS_ClassID);
+           END; (* With *)
+         read(groupfile, groupbuff);
+       END; (* WHILE *)
+     continue(yellow,30,24,'');
+     close(groupfile);
+END; (* T11_ViewGroups *)
+
+PROCEDURE P12_PrintGroupList; (* Output group list to lpt1:, A.K.A. List 1 *)
+VAR
+   Pagecount: integer;
+   Linecount: integer;
+BEGIN
+     title;
+     fastbox(1,1,79,24,cyan,black);
+     writexy(5,5,'*** DATA PRINT : GROUP RECORDS... (List 1)');
+     writexy(8,8,'Is dot matrix printer setup and online ?');
+     gotoxy(50,8);
+     readln(choice);
+     IF (choice in ['y','Y'])
+       THEN
+         BEGIN
+            Getdate(year,month,day,dow);
+            Pagecount:=1;
+            writeln(lst,'*** DATA PRINT : GROUP RECORDS... (List 1)');
+            writeln(lst);
+            writeln(lst,'          DATE : ',day,'/',month,'/',year);
+            writeln(lst,'          PAGE : ',PageCount);
+            writeln(lst);
+            writeln(lst,'Class Name        Total Lessons  ClassID No.');
+            writeln(lst);
+            reset(GroupFile);
+            read(groupfile, groupbuff);
+            linecount:=2;
+            While (not eof (groupfile)) DO
+              BEGIN
+                With groupbuff Do
+                  Begin
+                    writeln(lst,TS_ClassName:16,'     ',TS_TotLessons:3,'         ',TS_ClassID:2);
+                    writeln(lst);
+                    If lineCount>SizeOfPaper
+                       THEN
+                          BEGIN
+                            LineCount:=2;
+                            inc(PageCount);
+                            writeln(lst,#12); (* Throws a new page *)
+                            writeln(lst,'*** DATA PRINT : GROUP RECORDS... (List 1)');
+                            writeln(lst);
+                            writeln(lst,'          DATE : ',day,'/',month,'/',year);
+                            writeln(lst,'          PAGE : ',LineCount);
+                            writeln(lst,'');
+                            writeln(lst,'Class Name        Total Lessons    ClassID No.');
+                            writeln(lst,'');
+                          END; (* IF *)
+                    inc(LineCount);
+                  END; (* With *)
+                read(groupfile, groupbuff);
+              END; (* WHILE *)
+            writeln(lst,'*************** End of Group List ***************');
+            writeln(lst,#12); (* Throws a new page *)
+            continue(yellow,30,24,'');
+            close(groupfile);
+         END
+       ELSE
+         BEGIN
+            writexy(8,10,'Return to menu, Setup printer, then try agian');
+            continue(yellow,30,22,'');
+         END; (* IF THEN ELSE *)
+END; (* P12_PrintGroupList *)
+
+PROCEDURE G14_DeleteGroupRecord;
+(* delete a group record and all students linked to that group *)
+VAR
+TempClassID    : integer;
+studentkey     : array[0..NumOfStudents] of integer;
+StudentCount   : integer;
+index          : integer; (* used in initialising student attendance *)
+
+BEGIN
+     SpecifyGroup; (* GOES TO SEARCH, EVENTUALLY *)
+     IF VERIFIED
+        THEN
+            BEGIN
+                 title;
+                 fastbox(1,1,79,24,cyan,black);
+                 gotoxy(5,6);
+                 writeln('Group name : ',SearchClassName);
+                 writexy(3,7,'Do you REALLY want to Delete THIS Group AND all students in it (y/n) ?');
+                 gotoxy(75,7);
+                 readln(choice);
+                 IF choice='y'
+                   THEN
+                     BEGIN
+                       seek(GroupFile,key);
+                       read(GroupFile,GroupBuff);
+                       TempClassID:=GroupBuff.TS_ClassID;
+                       WITH GroupBuff DO
+                         BEGIN
+                           TS_ClassID:=key;
+                           TS_ClassName:='';
+                           TS_TotLessons:=0;
+                           seek(GroupFile,key);
+                           write(GroupFile,GroupBuff);
+                         END; (* WITH *)
+                   (* Initialise Variables for search on student file *)
+                       FOR i:=0 TO NumofStudents DO
+                        BEGIN
+                          StudentKey[i]:=-1;
+                        END; (* FOR *)
+                       i:=-1;
+                       key:=-1;
+                       StudentCount:=0; (* stores total number of students in group*)
+                       Reset(Studentfile);
+                   (* SEARCH TO FIND ALL STUDENTS IN THE Specified Group *)
+                       REPEAT
+                        Key:=key+1;
+                        Seek(Studentfile, key);
+                        Read(Studentfile, Studentbuff);
+                        IF Studentbuff.S_ClassID=TempClassID
+                         THEN
+                           BEGIN
+                            i:=i+1;
+                            StudentKey[i]:=key;
+                            inc(StudentCount);
+                           END; (* IF *)
+                       UNTIL (key=numofstudents);
+                       i:=0;
+                       IF studentcount>0  (* More than zero students in group *)
+                         THEN
+                          BEGIN
+                            Reset(StudentFile);
+                            WHILE (studentkey[i]>=0) DO
+                              BEGIN
+                                seek(StudentFile, StudentKey[i]);
+                                read(StudentFile, StudentBuff);
+                                WITH StudentBuff DO
+                                  BEGIN
+                                    S_Forname:='';
+                                    S_Surname:='';
+                                    S_ClassID:=-1;
+                                    S_TotLessons:=0;
+                                    FOR index:=1 TO Maxattend DO
+                                      BEGIN
+                                        S_Attend[index].Day:=-1; (* DUMMY VALUE *)
+                                      END;
+                                  END; (* WITH *)
+                                  seek(StudentFile, Studentkey[i]);
+                                  write(StudentFile, StudentBuff);
+                                  inc(i);
+                              END; (* WHILE *)
+                          END; (* IF *)
+                       Close(StudentFile);
+                       writexy(5,8,'RECORD DELETED!');
+                       continue(yellow,5,10,'');
+                     END
+                   ELSE
+                     BEGIN
+                       writexy(5,8,'GROUP NOT DELETED!');
+                       continue(yellow,5,10,'');
+                     END; (* IF THEN ELSE *)
+            END; (* IF *)
+     close(GroupFile);
+END; (* G14_DeleteGroupRecord *)
+
+(************************  END OF GROUP PROCEDURES **************************)
+
+
+(*******************   START OF ATTENDANCE PROCEDURES   ********************)
+
+PROCEDURE TX_PrintAttendNoteFile;
+(* output weekly absence note to printer *)
+VAR
+   lineStr: string;
+   Pagecount: integer;
+   Linecount: integer;
+BEGIN
+     reset(attendnote);
+     title;
+     fastbox(1,1,79,24,cyan,black);
+     writexy(5,5,'*** DATA PRINT : Weekly attendance note to Tutor...');
+     writexy(8,8,'Is dot matrix printer setup and online ?');
+     gotoxy(50,8);
+     readln(choice);
+     IF (choice in ['y','Y'])
+       THEN
+         BEGIN
+          writexy(8,10,'NOW printing attendance note');
+          Getdate(year,month,day,dow);
+          Pagecount:=1;
+          linecount:=4;
+          writeln(lst,'*** DATA PRINT : ABSENCE NOTE FILE...');
+          writeln(lst);
+          writeln(lst,'          DATE : ',day,'/',month,'/',year);
+          writeln(lst,'          PAGE : ',PageCount);
+          writeln(lst);
+          reset(attendnote);
+          WHILE not (eof(attendnote)) do
+            BEGIN
+              If lineCount>SizeOfPaper
+                 THEN
+                    BEGIN
+                       LineCount:=4;
+                       inc(PageCount);
+                       writeln(lst,#12); (* Throws a new page *)
+                       writeln(lst,'*** DATA PRINT : ABSENCE NOTE FILE...');
+                       writeln(lst);
+                       writeln(lst,'          DATE : ',day,'/',month,'/',year);
+                       writeln(lst,'          PAGE : ',LineCount);
+                       writeln(lst);
+                    END; (* IF *)
+              inc(LineCount);
+              Readln(Attendnote,lineStr);
+              writeln(lst,lineStr);
+            END; (* WHILE *)
+            writeln(lst,'************* END OF ABSENCE FILE ************');
+            writeln(lst,#12); (* Throws a new page *)
+            close(attendnote);
+         END
+       ELSE
+         BEGIN
+            writexy(8,10,'Return to menu, Setup printer, then try agian');
+            continue(yellow,30,22,'');
+         END; (* IF THEN ELSE *)
+END; (* TX_PrintAttendNoteFile *)
+
+PROCEDURE TX_InitAttendNoteFile;
+(* initialise absence note file *)
+BEGIN
+     title;
+     fastbox(1,1,79,24,cyan,black);
+     writexy(5,5,'ONLY when you have a hardcopy of the week`s Absence notes !');
+     write('    Initialise Weekly attendance note File (y/n)  => ');
+     choice:='n';
+     readln(choice);
+     IF choice='y'
+        THEN
+           BEGIN
+             rewrite(AttendNote);
+             textcolor(lightcyan);
+             writexy(5,9,'FILE INITIALISED !');
+             continue(yellow+blink,5,11,'');
+           END
+        ELSE
+           BEGIN
+              writexy(5,9,'FILE NOT INITIALISED !');
+              continue(yellow+blink,5,11,'');
+           END; (* IF THEN ELSE *)
+END; (* InitAttendNoteFile *)
+
+PROCEDURE TX_UpdateWeeklyAbsence;
+(* append an absence to the end of the absecnce note file *)
+BEGIN
+     reset(attendnote);
+     iocode:=ioresult;
+     IF iocode<>0 THEN rewrite(attendnote);
+     reset(attendnote);
+     append(attendnote);
+     writeln(attendnote,'---------------------------------------------------------------------');
+     writeln(attendnote,'Weekly Absence note to Tutor...');
+     writeln(attendnote,'To ',studentbuff.S_PTutor);
+     writeln(attendnote,'    The Student ',Studentbuff.S_Forname,' ',Studentbuff.S_Surname);
+     writeln(attendnote,'    Was absent on ',day,'/',month,'/',year,' from ',Groupbuff.TS_ClassName);
+     writeln(attendnote,'---------------------------------------------------------------------');
+     close(attendnote);
+END; (* UpdateWeeklyAbsence *)
+
+PROCEDURE AttendanceTable;
+(* outputs grid used in attendance entry *)
+VAR
+   Count : integer;
+BEGIN
+     title;
+     fastbox(1,1,79,24,cyan,black);
+     writexy(5,5,'*** DATA ENTRY : ATTENDANCE...');
+     textcolor(lightcyan);
+     writexy(6,7,'Name');
+     writexy(42,7,'Present(y/n)');
+     writexy(40,5,'Group Name : ');
+     linexy(40,7,40,24,lightblue,black,186);
+     linexy(3,8,68,8,lightblue,black,205);
+     writecharxy(40,8,206);
+     gotoxy(2,2);
+     textcolor(lightcyan);
+END; (* AttendanceTable *)
+
+PROCEDURE SpecifyDate(VAR year,month,day : word);
+(* accepts and validates a date *)
+VAR
+   tempday  : string;  (* used in validation *)
+   tempmonth: string;  (* used in validation *)
+   tempyear : string;  (* used in validation *)
+   code     : integer; (* used in val statement *)
+BEGIN
+   title;
+   writexy(5,5,'SPECIFY DATE...');
+   writexy(10,7,'Enter date... ');
+   writexy(15,9,'Day....:');
+   writexy(15,10,'Month..:');
+   writexy(15,11,'Year...:');
+   repeat
+      gotoxy(25,9);
+      readln(tempday);
+      code:=0;
+      val(tempday,day,code);
+   until (day in [1..31]);
+   repeat
+      gotoxy(25,10);
+      readln(tempmonth);
+      code:=0;
+      val(tempmonth,month,code);
+   until (month in [1..12]);
+   repeat
+      gotoxy(25,11);
+      readln(tempyear);
+      code:=0;
+      val(tempyear,year,code);
+   until ((year>=1980) and (year<=2099));
+END; (* SpecifyDate *)
+
+PROCEDURE IndirectAttendInput;
+(* input attendance using date specified by user *)
+VAR
+   y              : integer; (* USED IN ATTENDANCE TABLE *)
+   StudentCount   : integer; (* Used in attendance screen table arrangenment *)
+   LessonNum      : Integer;
+   studentkey     : array[0..NumOfStudents] of integer;
+   groupkey       : integer;
+   PageNum        : integer; (*keeps count of multiple page attendance table*)
+
+BEGIN
+   SpecifyGroup;  (* Validates group name *)
+   IF verified and (GroupBuff.TS_TotLessons<100)
+      THEN
+         BEGIN
+            groupkey:=key;  (* "key" is result of groupsearch(via specifyGroup) *)
+            reset(GroupFile);
+            Seek(GroupFile, groupkey);
+            Read(GroupFile, GroupBuff);
+            inc(GroupBuff.TS_TotLessons);
+            Seek(GroupFile, GroupKey);
+            Write(GroupFile, GroupBuff);
+            close(GroupFile);
+            (* Initialise Variables for search *)
+            FOR i:=0 TO NumofStudents DO
+              BEGIN
+                StudentKey[i]:=-1;
+              END; (* FOR *)
+            i:=-1;
+            key:=-1;
+            StudentCount:=0; (* stores total number of students in group*)
+            Reset(Studentfile);
+             (* SEARCH TO FIND ALL STUDENTS IN THE Specified Group *)
+            REPEAT
+              Key:=key+1;
+              Seek(Studentfile, key);
+              Read(Studentfile, Studentbuff);
+              IF Studentbuff.S_ClassID=groupkey
+                THEN
+                  BEGIN
+                    i:=i+1;
+                    StudentKey[i]:=key;
+                    inc(StudentCount);
+                  END; (* IF *)
+            UNTIL (key=numofstudents);
+            PageNum:=0;
+            y:=9;
+            i:=0;
+            IF studentcount>0  (* More than zero students in group *)
+              THEN
+                BEGIN
+                   AttendanceTable;
+                   Reset(StudentFile);
+                   gotoxy(53,5);
+                   writeln(SearchClassName);
+                   inc(PageNum);
+                   gotoxy(53,6);
+                   writeln('Page : ',pagenum);
+                   gotoxy(15,6);
+                   writeln('DATE : ',day,'/',month,'/',year);
+                   WHILE (studentkey[i]>=0) and (y<=23) DO
+                      BEGIN
+                        IF (studentkey[i]>=0) and (y>=23)
+                          THEN
+                            BEGIN
+                              AttendanceTable;
+                              Reset(StudentFile);
+                              gotoxy(53,5);
+                              writeln(SearchClassName);
+                              inc(PageNum);
+                              gotoxy(53,6);
+                              writeln('Page : ',pagenum);
+                              gotoxy(15,6);
+                              writeln('DATE : ',day,'/',month,'/',year);
+                              y:=9;
+                            END; (* IF *)
+                        seek(StudentFile, StudentKey[i]);
+                        read(StudentFile, StudentBuff);
+                        WITH StudentBuff DO      (* WRITE NAMES TO TABLE*)
+                           BEGIN
+                             gotoxy(3,y);
+                             writeln(S_Forname);
+                             gotoxy(20,y);
+                             writeln(S_Surname);
+                           END; (* WITH *)
+                        REPEAT
+                           gotoxy(42,y);
+                           write('[.]      ');
+                           Gotoxy(43,y);
+                           read(choice);
+                        UNTIL (choice='y') or (choice='n');
+                        IF choice='y'   (* STUDENT IS PRESENT *)
+                          THEN
+                            BEGIN
+                              seek(StudentFile, Studentkey[i]);
+                              read(StudentFile, StudentBuff);
+                              inc(Studentbuff.S_TotLessons);
+                              LessonNum:=Studentbuff.S_TotLessons;
+                              Studentbuff.S_Attend[LessonNum].Here_or_Away:=true;
+                              Studentbuff.S_Attend[LessonNum].Day:=day;
+                              Studentbuff.S_Attend[LessonNum].month:=month;
+                              Studentbuff.S_Attend[LessonNum].year:=year;
+                            END
+                          ELSE            (* STUDENT IS ABSENT *)
+                            BEGIN
+                              seek(StudentFile, Studentkey[i]);
+                              read(StudentFile, StudentBuff);
+                              inc(Studentbuff.S_TotLessons);
+                              LessonNum:=Studentbuff.S_TotLessons;
+                              Studentbuff.S_Attend[LessonNum].Here_or_Away:=False;
+                              StudentBuff.S_TotAbsent:=StudentBuff.S_TotAbsent+1;
+                              Studentbuff.S_Attend[LessonNum].Day:=day;
+                              Studentbuff.S_Attend[LessonNum].month:=month;
+                              Studentbuff.S_Attend[LessonNum].year:=year;
+                              textcolor(yellow);
+                              writexy(10,24,'Updating weekly absence note, Please WAIT!');
+                              TX_UpdateWeeklyAbsence;
+                              linexy(10,24,65,24,black,black,45);
+                              textcolor(lightcyan);
+                            END; (* IF THEN ELSE *)
+                        seek(StudentFile, Studentkey[i]);
+                        write(StudentFile, StudentBuff);
+                        inc(y);
+                        inc(i);
+                      END; (* WHILE *)
+                   Close(StudentFile);
+                END; (* IF *)
+            IF studentcount=0 (* IF NO STUDENTS IN GROUP *)
+               THEN
+                  BEGIN
+                    reset(GroupFile);      (* CORRECTS TS_Totlessons *)
+                    Seek(GroupFile, groupkey);
+                    Read(GroupFile, GroupBuff);
+                    dec(GroupBuff.TS_TotLessons);
+                    Seek(GroupFile, GroupKey);
+                    Write(GroupFile, GroupBuff);
+                    close(Groupfile);
+                    title;
+                    fastbox(1,1,79,24,cyan,black);
+                    writexy(5,5,'*** DATA ENTRY : ATTENDANCE...');
+                    textcolor(lightcyan);
+                    writexy(8,6,'There are currently no students in this group...');
+                    writexy(8,8,'Press Return to exit to menu.');
+                    readln;
+                  END;  (* IF studentnum>0 *)
+            IF (verified=true) and (GroupBuff.TS_TotLessons>100)
+               THEN (* IF NUMBER OF LESSONS HAS EXCEEDED CONST=MAXLESSON *)
+                 BEGIN
+                   title;
+                   fastbox(1,1,79,24,cyan,black);
+                   writexy(5,5,'*** DATA ENTRY : ATTENDANCE...');
+                   textcolor(lightcyan);
+                   writexy(8,6,'The Number of lessons has exceeded Maxiumum...');
+                   writexy(3,8,'Press Return to exit to menu, you can RESET the attendance in End Of term.');
+                   readln;
+                 END;  (* IF *)
+         END; (* if *)
+END; (*IndirectAttendInput*)
+
+PROCEDURE DirectAttendInput;
+(* input attendance using date specified by system *)
+VAR
+   y              : integer; (* USED IN ATTENDANCE TABLE *)
+   StudentCount   : integer; (* Used in attendance screen table arrangenment *)
+   LessonNum      : Integer;
+   studentkey     : array[0..NumOfStudents] of integer;
+   groupkey       : integer;
+   PageNum        : integer; (*keeps count of multiple page attendance table*)
+BEGIN
+     SpecifyGroup;  (* Validates group name *)
+      IF (verified) and (GroupBuff.TS_TotLessons<100)
+        THEN
+          BEGIN
+            groupkey:=key;  (* "key" is result of groupsearch(via specifyGroup) *)
+            reset(GroupFile);
+            Seek(GroupFile, groupkey);
+            Read(GroupFile, GroupBuff);
+            GroupBuff.TS_TotLessons:=GroupBuff.TS_TotLessons+1;
+            Seek(GroupFile, GroupKey);
+            Write(GroupFile, GroupBuff);
+            close(GroupFile);
+            (* Initialise Variables for search *)
+            FOR i:=0 TO NumofStudents DO
+              BEGIN
+                StudentKey[i]:=-1;
+              END; (* FOR *)
+            i:=-1;
+            key:=-1;
+            StudentCount:=0; (* stores total number of students in group*)
+            Reset(Studentfile);
+             (* SEARCH TO FIND ALL STUDENTS IN THE Specified Group *)
+            REPEAT
+              Key:=key+1;
+              Seek(Studentfile, key);
+              Read(Studentfile, Studentbuff);
+              IF Studentbuff.S_ClassID=groupkey
+                THEN
+                  BEGIN
+                    i:=i+1;
+                    StudentKey[i]:=key;
+                    inc(StudentCount);
+                  END; (* IF *)
+            UNTIL (key=numofstudents);
+            PageNum:=0;
+            y:=9;
+            i:=0;
+            IF studentcount>0  (* More than zero students in group *)
+              THEN
+                BEGIN
+                  AttendanceTable;
+                  Reset(StudentFile);
+                  gotoxy(53,5);
+                  writeln(SearchClassName);
+                  inc(PageNum);
+                  gotoxy(53,6);
+                  writeln('Page : ',pagenum);
+                  WHILE (studentkey[i]>=0) and (y<=23) DO
+                   BEGIN
+                     IF (studentkey[i]>=0) and (y>=23)
+                       THEN
+                         BEGIN
+                           AttendanceTable;
+                           Reset(StudentFile);
+                           gotoxy(53,5);
+                           writeln(SearchClassName);
+                           inc(PageNum);
+                           gotoxy(53,6);
+                           writeln('Page : ',pagenum);
+                           y:=9;
+                         END; (* IF *)
+                     seek(StudentFile, StudentKey[i]);
+                     read(StudentFile, StudentBuff);
+                     WITH StudentBuff DO      (* WRITE NAMES TO TABLE*)
+                       BEGIN
+                         gotoxy(3,y);
+                         writeln(S_Forname);
+                         gotoxy(20,y);
+                         writeln(S_Surname);
+                       END; (* WITH *)
+                     REPEAT
+                       gotoxy(42,y);
+                       write('[.]      ');
+                       Gotoxy(43,y);
+                       read(choice);
+                     UNTIL (choice='y') or (choice='n');
+                     IF choice='y'   (* STUDENT IS PRESENT *)
+                       THEN
+                         BEGIN
+                           seek(StudentFile, Studentkey[i]);
+                           read(StudentFile, StudentBuff);
+                           inc(Studentbuff.S_TotLessons);
+                           LessonNum:=Studentbuff.S_TotLessons;
+                           Studentbuff.S_Attend[LessonNum].Here_or_Away:=true;
+                           GetDate(year,month,day,dow);
+                           Studentbuff.S_Attend[LessonNum].Day:=day;
+                           Studentbuff.S_Attend[LessonNum].month:=month;
+                           Studentbuff.S_Attend[LessonNum].year:=year;
+                         END
+                       ELSE            (* STUDENT IS ABSENT *)
+                         BEGIN
+                           seek(StudentFile, Studentkey[i]);
+                           read(StudentFile, StudentBuff);
+                           inc(Studentbuff.S_TotLessons);
+                           LessonNum:=Studentbuff.S_TotLessons;
+                           Studentbuff.S_Attend[LessonNum].Here_or_Away:=False;
+                           StudentBuff.S_TotAbsent:=StudentBuff.S_TotAbsent+1;
+                           GetDate(year,month,day,dow);
+                           Studentbuff.S_Attend[LessonNum].Day:=day;
+                           Studentbuff.S_Attend[LessonNum].month:=month;
+                           Studentbuff.S_Attend[LessonNum].year:=year;
+                           textcolor(yellow);
+                           writexy(10,24,'Updating weekly absence note, Please WAIT!');
+                           TX_UpdateWeeklyAbsence;
+                           linexy(10,24,65,24,black,black,45);
+                           textcolor(lightcyan);
+                         END; (* IF THEN ELSE *)
+                     seek(StudentFile, Studentkey[i]);
+                     write(StudentFile, StudentBuff);
+                     inc(y);
+                     inc(i);
+                   END; (* WHILE *)
+                  Close(StudentFile);
+                END; (* IF *)
+            IF studentcount=0 (* IF NO STUDENTS IN GROUP *)
+              THEN
+                 BEGIN
+                   reset(GroupFile);      (* CORRECTS TS_Totlessons *)
+                   Seek(GroupFile, groupkey);
+                   Read(GroupFile, GroupBuff);
+                   GroupBuff.TS_TotLessons:=GroupBuff.TS_TotLessons-1;
+                   LessonNum:=GroupBuff.TS_TotLessons;
+                   Seek(GroupFile, GroupKey);
+                   Write(GroupFile, GroupBuff);
+                   close(Groupfile);
+                   title;
+                   fastbox(1,1,79,24,cyan,black);
+                   writexy(5,5,'*** DATA ENTRY : ATTENDANCE...');
+                   textcolor(lightcyan);
+                   writexy(8,6,'There are currently no students in this group...');
+                   writexy(8,8,'Press Return to exit to menu.');
+                   readln;
+                 END;  (* IF studentnum<0 *)
+            IF (verified=true) and (GroupBuff.TS_TotLessons>100)
+              THEN
+                BEGIN  (* IF NUMBER OF LESSONS HAS EXCEEDED CONST=MAXLESSON *)
+                 title;
+                 fastbox(1,1,79,24,cyan,black);
+                 writexy(5,5,'*** DATA ENTRY : ATTENDANCE...');
+                 textcolor(lightcyan);
+                 writexy(8,6,'The Number of lessons has exceeded Maxiumum...');
+                 writexy(3,8,'Press Return to exit to menu, you can RESET the attendance in End Of term.');
+                 readln;
+                END;  (* IF *)
+      END; (* IF *)
+END; (* DirectAttendInput *)
+
+Procedure AttedanceEntryMethod(var AttendEntryMethod:integer);
+(* prompts user to choose direct or indirect attendance entry *)
+VAR
+   ValidateAttendMethod:string;
+BEGIN
+  REPEAT
+    clrscr;
+    writeln;
+    writeln('Do you want to enter attendance "Directly" or "Indirectly" ?');
+    writeln;
+    writeln(' (1) Directly (Take date from system)');
+    writeln(' (2) Indirectly (Enter date manually)');
+    readln(ValidateAttendMethod);
+    val(ValidateAttendMethod,AttendEntryMethod,code);
+    IF (AttendEntryMethod>2) and (AttendEntryMethod<1)
+      Then
+        BEGIN
+          writeln(' 1 to 2 only, REDO!, Press return to continue...');
+          readln;
+        END; (* IF *)
+  UNTIL (AttendEntryMethod<=2) and (AttendEntryMethod>=1);
+END; (*AttedanceEntryMethod*)
+
+PROCEDURE A11_AttendanceEntry;
+(* calls AttedanceEntryMethod, then branches depending on choice *)
+var
+   AttendEntryMethod : integer;
+
+BEGIN
+  AttedanceEntryMethod(AttendEntryMethod); (* direct or indirect *)
+  IF AttendEntryMethod=2 THEN SpecifyDate(year,month,day);
+  IF (AttendEntryMethod=1)
+    THEN
+      BEGIN
+        DirectAttendInput; (* ENTER ATTENDANCE using date from system *)
+      END
+    ELSE
+      BEGIN                (* ENTER ATTENDANCE FOR A GIVEN DATE *)
+        IndirectAttendInput;
+      END; (* IF THEN ELSE *)
+  writeln;
+  writeln('  Press Return to continue...');
+  readln;
+END; (* A11_AttendanceEntry *)
+
+PROCEDURE A12_ChangeAttendance;
+(* allows user to alter a the date and attenadnece for a specific
+   lesson number *)
+VAR
+   Strlessonnum   : string;
+   LessonNum      : Integer;
+   attendanceFlag : char;
+BEGIN
+     searchidentifier;
+     IF verified
+        THEN
+            BEGIN
+              reset(studentfile);
+              seek(StudentFile, Key);
+              read(StudentFile, StudentBuff);
+              writexy(5,10,'Enter lesson number : ');
+              Repeat
+                 gotoxy(30,10);
+                 writeln('       ');
+                 gotoxy(30,10);
+                 readln(Strlessonnum);
+                 val(strlessonnum,lessonnum,code);
+              Until lessonnum in [1..maxattend];
+              SpecifyDate(year,month,day);
+              title;
+              fastbox(1,1,79,24,cyan,black);
+              writexy(5,5,'*** DATA ENTRY : Alter Student Attendance Record...');
+              textcolor(lightcyan);
+              WITH StudentBuff DO
+                BEGIN
+                   gotoxy(3,9);
+                   writeln(S_Forname);
+                   gotoxy(20,9);
+                   writeln(S_Surname);
+                END; (* WITH *)
+              seek(StudentFile, key);
+              read(StudentFile, studentBuff);
+              writexy(5,12,'Was the student absent(`n`) or present(y`) on this occasion ?');
+              REPEAT
+                 gotoxy(15,13);
+                 writeln('          ');
+                 gotoxy(15,13);
+                 readln(attendanceFlag);
+              UNTIL (attendanceFlag='y') or (attendanceFlag='n');
+              IF attendanceFlag='y'
+                THEN
+                  BEGIN
+                    IF Studentbuff.S_Attend[LessonNum].Here_or_Away=false
+                      THEN
+                        BEGIN
+                          dec(Studentbuff.S_TotAbsent);
+                        END; (* IF *)
+                    Studentbuff.S_Attend[LessonNum].Here_or_Away:=true;
+                    Studentbuff.S_Attend[LessonNum].Day:=day;
+                    Studentbuff.S_Attend[LessonNum].month:=month;
+                    Studentbuff.S_Attend[LessonNum].year:=year;
+                    writexy(5,17,'Do you wish to UPDATE student attendance record ? (y/n) ');
+                    choice:='n';
+                    gotoxy(65,17);
+                    readln(choice);
+                    IF choice='y'
+                      THEN
+                        BEGIN
+                          seek(Studentfile,key);
+                          write(studentfile,studentbuff);
+                        END; (* IF *)
+                    Close(StudentFile);
+                  END; (* IF *)
+              IF attendanceFlag='n'
+                THEN
+                  BEGIN
+                    IF Studentbuff.S_Attend[LessonNum].Here_or_Away=true
+                      THEN
+                        BEGIN
+                          inc(Studentbuff.S_TotAbsent);
+                        END; (* IF *)
+                    Studentbuff.S_Attend[LessonNum].Here_or_Away:=false;
+                    Studentbuff.S_Attend[LessonNum].Day:=day;
+                    Studentbuff.S_Attend[LessonNum].month:=month;
+                    Studentbuff.S_Attend[LessonNum].year:=year;
+                    writexy(5,17,'Do you wish to UPDATE student attendance record ? (y/n) ');
+                    choice:='n';
+                    gotoxy(65,17);
+                    readln(choice);
+                    IF choice='y'
+                      THEN
+                        BEGIN
+                          seek(Studentfile,key);
+                          write(studentfile,studentbuff);
+                        END; (* IF *)
+                    Close(StudentFile);
+                  END; (* IF *)
+            END
+        ELSE
+            BEGIN
+                 writexy(10,13,'The Student You Requested is NOT on FILE');
+                 continue(yellow,10,14,'');
+            END; (* IF THEN ELSE *)
+END; (* A12_ChangeAttendance *)
+
+PROCEDURE A13_ViewStudentAttendance;
+(* view a students attendance, showing date and lesson number *)
+VAR
+   ViewAnother : Boolean;
+   TempAttendStr: String[10];
+   x,y         : integer; (* Screen POSITION identifier *)
+BEGIN
+   REPEAT
+      reset(StudentFile);
+      clrscr;
+      textcolor(lightcyan);
+      SearchIdentifier; (* GOES TO SEARCH, EVENTUALLY *)
+      IF verified
+         THEN
+            BEGIN
+               WITH StudentBuff DO
+                  BEGIN
+                     TITLE;
+                     fastbox(1,1,79,24,cyan,black);
+                     textcolor(lightcyan);
+                     writexy(4,5,'*** Student Data View...');
+                     writexy(4,7,'Forname: ');
+                     writexy(4,8,'Surname: ');
+                     gotoxy(13,7);
+                     writeln(S_Forname:20,'         Total Absent...',S_TotAbsent:3);
+                     gotoxy(13,8);
+                     writeln(S_Surname:20,'         Total Lessons..',S_TotLessons:3,' GCSE pt.: ',S_GCSEpts);
+                     gotoxy(5,10);
+                     writeln('Dates...                        Lesson number...');
+                     i:=1;
+                     x:=4;
+                     y:=11;
+                     WHILE (S_Attend[i].Day>0) and (i<>maxattend) DO
+                        BEGIN
+                                       (* -1=Dummy Value *)
+                           IF S_Attend[i].Here_or_Away=true
+                              Then TempAttendStr:='Present';
+                           IF S_Attend[i].Here_or_Away=False
+                              Then TempAttendStr:='Absent';
+                           IF (y>22)
+                              THEN
+                                 BEGIN
+                                   gotoxy(10,23);
+                                   writeln('  Press "Return" to see next Page !');
+                                   readln;
+                                   TITLE;
+                                   fastbox(1,1,79,24,cyan,black);
+                                   textcolor(lightcyan);
+                                   writexy(4,7,'Forname: ');
+                                   writexy(4,8,'Surname: ');
+                                   writexy(4,5,'*** Student Data View...');
+                                   gotoxy(13,7);
+                                   writeln(S_Forname:20,'         Total Absent...',S_TotAbsent:3);
+                                   gotoxy(13,8);
+                                   writeln(S_Surname:20,'         Total Lessons..',S_TotLessons:3,' GCSE pt.: ',S_GCSEpts);
+                                   gotoxy(5,10);
+                                   writeln('Dates...                        Lesson number...');
+                                   x:=4;
+                                   y:=11;
+                                 END; (* IF *)
+                           Gotoxy(x,y);
+                           writeln(S_Attend[i].Day:2,'/',S_Attend[i].Month:2,'/'
+                                   ,S_Attend[i].Year:4,'....',TempAttendStr:7,'      ',i);
+                           inc(i);
+                           inc(y);
+                        END; (* WHILE *)
+                  END; (* WITH *)
+               Writexy(10,23,'View Another Student Record ? (y/n)');
+               choice:='n';
+               gotoxy(55,23);
+               readln(choice);
+               ViewAnother:=false;
+               IF choice='y' THEN ViewAnother:=true;
+            END
+         ELSE
+           IF NOT verified
+             THEN
+               BEGIN
+                  writexy(10,9,'The Student You Requested is NOT on FILE');
+                  continue(yellow+blink,10,10,'');
+                  ViewAnother:=false;
+               END; (* IF THEN ELSE *)
+     UNTIL ViewAnother=false;
+     close(StudentFile);
+END; (* A13_ViewStudentAttendance *)
+
+PROCEDURE A14_GroupAttendStats;
+(* view a groups attendance, a collation of student attendance totals *)
+VAR
+   y              : integer; (* USED IN ATTENDANCE TABLE *)
+   StudentCount   : integer; (* Used in attendance screen table arrangenment *)
+   studentkey     : array[0..NumOfStudents] of integer;
+   groupkey       : integer;
+BEGIN
+     SpecifyGroup;  (* Validates group name *)
+     IF verified
+        THEN
+            BEGIN
+                 groupkey:=key;  (* "key" is result of groupsearch(via specifyGroup) *)
+                 (* Initialise Variables for search *)
+                 FOR i:=0 TO NumofStudents DO
+                     BEGIN
+                          StudentKey[i]:=-1;
+                     END; (* FOR *)
+                 i:=-1;
+                 key:=0;
+                 StudentCount:=0; (* stores total number of students in group*)
+                 Reset(Studentfile);
+(* SEARCH TO FIND ALL STUDENTS IN THE Specified Group *)
+                 while (key<=numofstudents) do
+                   BEGIN
+                       Seek(Studentfile, key);
+                       Read(Studentfile, Studentbuff);
+                       IF Studentbuff.S_ClassID=groupkey
+                          THEN
+                              BEGIN
+                                  i:=i+1;
+                                  StudentKey[i]:=key;
+                                  inc(StudentCount);
+                              END; (* IF *)
+                       inc(key);
+                   END; (* WHILE *)
+                 IF studentcount>0  (* More than zero students in group *)
+                  THEN
+                   BEGIN
+                     title;
+                     fastbox(1,1,79,24,cyan,black);
+                     writexy(5,5,'*** DATA VIEW : STUDENT STATISTICS...');
+                     textcolor(lightcyan);
+                     writexy(6,7,'Name..............................Total Absent...Total Lessons..GCSE pt.');
+                     writexy(45,5,'Group Name : ');
+                     i:=0;
+                     y:=9;
+                     Reset(StudentFile);
+                     gotoxy(65,5);
+                     writeln(SearchClassName);
+                     WHILE (StudentKey[i]>=0) DO
+                       BEGIN
+                          seek(StudentFile, StudentKey[i]);
+                          read(StudentFile, StudentBuff);
+                          WITH StudentBuff DO            (* WRITE NAMES TO TABLE*)
+                             BEGIN
+                              gotoxy(5,y);
+                              writeln(S_Forname:15,S_Surname:20,'     ',
+                                 S_TotAbsent:3,'           ',S_Totlessons:3,'          ',S_GCSEpts);
+                           END; (* WITH *)
+                          IF (y>21)
+                              THEN
+                                 BEGIN
+                                   gotoxy(10,23);
+                                   writeln('  Press "Return" to see next Page !');
+                                   readln;
+                                   TITLE;
+                                   fastbox(1,1,79,24,cyan,black);
+                                   textcolor(lightcyan);
+                                   writexy(5,5,'*** DATA VIEW : STUDENT STATISTICS...');
+                                   textcolor(lightcyan);
+                                   writexy(6,7,'Name..............................Total Absent...Total Lessons..GCSE pt.');
+                                   writexy(45,5,'Group Name : ');
+                                   gotoxy(65,5);
+                                   writeln(SearchClassName);
+                                   y:=8;
+                                 END; (* IF *)
+                        inc(i);
+                        inc(y);
+                       END; (* WHILE *)
+                     writexy(5,y+1,'Press Return to continue...');
+                     readln;
+                     y:=9;
+                     i:=0;
+                     Close(StudentFile);
+                   END
+                  ELSE   (* IF NO STUDENTS IN GROUP *)
+                    BEGIN
+                         title;
+                         fastbox(1,1,79,24,cyan,black);
+                         writexy(5,5,'*** DATA VIEW : STUDENT ATTENDANCE STATISTICS...');
+                         textcolor(lightcyan);
+                         writexy(50,5,'Group Name : ');
+                         gotoxy(65,5);
+                         writeln(SearchClassName);
+                         writexy(8,6,'There are currently no students in this group...');
+                         writexy(8,8,'Press Return to exit to menu.');
+                         continue(yellow,8,10,'');
+                    END;  (* IF THEN ELSE *)
+            END; (* IF verified *)
+END; (* A14_GroupAttendStats *)
+
+PROCEDURE P11_Printattend;
+(* print group attendance stats (as seen in A14_GroupAttendStats) *)
+VAR
+   LineCount      : integer;
+   PageCount      : Integer;
+   StudentCount   : integer; (* Used in attendance screen table arrangenment *)
+   studentkey     : array[0..NumOfStudents] of integer;
+   groupkey       : integer;
+BEGIN
+     SpecifyGroup;  (* Validates group name *)
+     IF verified
+        THEN
+            BEGIN
+                 groupkey:=key;  (* "key" is result of groupsearch(via specifyGroup) *)
+                 reset(GroupFile);
+                 Seek(GroupFile, groupkey);
+                 Read(GroupFile, GroupBuff);
+                 close(GroupFile);
+                 (* Initialise Variables for search *)
+                 FOR i:=0 TO NumofStudents DO
+                     BEGIN
+                          StudentKey[i]:=-1;
+                     END; (* FOR *)
+                 i:=-1;
+                 key:=-1;
+                 StudentCount:=0; (* stores total number of students in group*)
+                 Reset(Studentfile);
+(* SEARCH TO FIND ALL STUDENTS IN THE Specified Group *)
+                 REPEAT
+                       Key:=key+1;
+                       Seek(Studentfile, key);
+                       Read(Studentfile, Studentbuff);
+                       IF Studentbuff.S_ClassID=groupkey
+                          THEN
+                              BEGIN
+                                  i:=i+1;
+                                  StudentKey[i]:=key;
+                                  inc(StudentCount);
+                              END; (* IF *)
+                 UNTIL (key=numofstudents);
+                 LineCount:=1;
+                 PageCount:=1;
+                 IF studentcount>0  (* More than zero students in group *)
+                  THEN
+                   BEGIN
+                     title;
+                     fastbox(1,1,79,24,cyan,black);
+                     writexy(5,5,'*** DATA PRINT : Student attendance statistics...');
+                     writexy(8,8,'Is dot matrix printer setup and online ?');
+                     gotoxy(50,8);
+                     readln(choice);
+                     getdate(year,month,day,dow);
+                     IF (choice in ['y','Y'])
+                      THEN
+                        BEGIN
+                           writeln(lst,'*** DATA PRINT : Student attendance statistics...');
+                           writeln(lst);
+                           writeln(lst,'    Group Name : ',SearchClassName);
+                           writeln(lst);
+                           writeln(lst,'          DATE : ',day,'/',month,'/',year);
+                           writeln(lst,'          PAGE : ',PageCount);
+                           writeln(lst);
+                           writeln(lst,'Name..............................Total Absent...Total Lessons...GCSE pt.');
+                           writeln(lst);
+                           i:=0;
+                           Reset(StudentFile);
+                           WHILE (StudentKey[i]>=0) DO
+                             BEGIN
+                               seek(StudentFile, StudentKey[i]);
+                               read(StudentFile, StudentBuff);
+                               WITH StudentBuff DO   (* WRITE NAMES TO TABLE*)
+                                 BEGIN
+                                   writeln(lst,S_Forname:15,' ',S_Surname:20
+                                              ,'       ',S_TotAbsent:3
+                                              ,'       ',S_Totlessons:3
+                                              ,'         ',S_GCSEpts);
+                                 END; (* WITH *)
+                               inc(i);
+                               If lineCount>SizeOfPaper
+                                 THEN
+                                   BEGIN
+                                     LineCount:=2;
+                                     inc(PageCount);
+                                     writeln(lst,#12); (* Throws a new page *)
+                                     writeln(lst,'*** DATA PRINT : Student attendance statistics...');
+                                     writeln(lst);
+                                     writeln(lst,'    Group Name : ',SearchClassName);
+                                     writeln(lst);
+                                     writeln(lst,' Printing DATE : ',day,'/',month,'/',year);
+                                     writeln(lst,'          PAGE : ',PageCount);
+                                     writeln(lst);
+                                     writeln(lst,'Name..............................Total Absent...Total Lessons...GCSE pt.');
+                                   END; (* IF *)
+                               inc(LineCount);
+                             END; (* WHILE *)
+                           writeln(lst,#12);(* #12 Throws a new page *)
+                           writexy(5,10,'Press Return to continue...');
+                           readln;
+                           i:=0;
+                           Close(StudentFile);
+                        END
+                      ELSE
+                        BEGIN
+                          writexy(8,10,'Return to menu, Setup printer, then try agian');
+                          continue(yellow,30,22,'');
+                        END; (* IF THEN ELSE *)
+                   END
+                  ELSE   (* IF NO STUDENTS IN GROUP *)
+                    BEGIN
+                         title;
+                         fastbox(1,1,79,24,cyan,black);
+                         writexy(5,5,'*** DATA PRINT : GROUP ATTENDANCE STATISTICS...');
+                         textcolor(lightcyan);
+                         writexy(50,5,'Group Name : ');
+                         gotoxy(65,5);
+                         writeln(SearchClassName);
+                         writexy(8,6,'There are currently no students in this group...');
+                         writexy(8,8,'Press Return to exit to menu.');
+                         continue(yellow,8,10,'');
+                    END;  (* IF THEN ELSE *)
+            END; (* IF verified *)
+END; (* A14_Printattend *)
+
+PROCEDURE A17_DeleteLastLesson;
+(* deletes to last recorded attenadnec entry for each student on a specific
+   group, and also updates totals of group and student *)
+VAR
+   StudentCount       : integer;
+   LessonNum          : Integer;
+   studentkey         : array[0..NumOfStudents] of integer;
+   groupkey           : integer;
+   ConfirmDeleteLesson: string;
+BEGIN
+   SpecifyGroup;  (* Validates group name *)
+   IF verified
+      THEN
+         BEGIN
+            groupkey:=key;  (* "key" is result of groupsearch(via specifyGroup) *)
+            (* Initialise Variables for search *)
+            FOR i:=0 TO NumofStudents DO
+              BEGIN
+                StudentKey[i]:=-1;
+              END; (* FOR *)
+            i:=-1;
+            key:=-1;
+            StudentCount:=0; (* stores total number of students in group*)
+            Reset(Studentfile);
+(* SEARCH TO FIND ALL STUDENTS IN THE Specified Group *)
+            REPEAT
+              Key:=key+1;
+              Seek(Studentfile, key);
+              Read(Studentfile, Studentbuff);
+              IF Studentbuff.S_ClassID=groupkey
+                THEN
+                  BEGIN
+                    i:=i+1;
+                    StudentKey[i]:=key;
+                    inc(StudentCount);
+                  END; (* IF *)
+            UNTIL (key=numofstudents);
+            i:=0;
+            IF (studentcount>0)
+              (* More than zero students in group *)
+              THEN
+                BEGIN
+                  title;
+                  fastbox(1,1,79,24,cyan,black);
+                  writexy(5,5,'*** DATA DELETE : ATTENDANCE...');
+                  textcolor(lightcyan);
+                  writexy(8,7,'Do you wish to delete last lesson (y/n)');
+                  gotoxy(60,7);
+                  readln(ConfirmDeleteLesson);
+                  IF (ConfirmDeleteLesson='y')
+                  THEN
+                   BEGIN
+                    reset(GroupFile);
+                    Seek(GroupFile, groupkey);
+                    Read(GroupFile, GroupBuff);
+                    IF GroupBuff.TS_TotLessons>0
+                       THEN
+                          dec(GroupBuff.TS_TotLessons);
+                    Seek(GroupFile, GroupKey);
+                    Write(GroupFile, GroupBuff);
+                    Close(Groupfile);
+                    Reset(StudentFile);
+                    WHILE (studentkey[i]>=0)  DO
+                      BEGIN
+                        seek(StudentFile, StudentKey[i]);
+                        read(StudentFile, StudentBuff);
+                        IF Studentbuff.S_TotLessons>=0
+                        THEN
+                          BEGIN
+                            LessonNum:=Studentbuff.S_TotLessons;
+                            IF (Studentbuff.S_Attend[LessonNum].Here_or_Away=false)
+                               AND (Studentbuff.S_TotAbsent>0)
+                              THEN
+                                BEGIN
+                                     dec(Studentbuff.S_TotAbsent);
+                                END; (* IF *)
+                            Studentbuff.S_Attend[LessonNum].Here_or_Away:=true;
+                            Studentbuff.S_Attend[LessonNum].Day:=-1;
+                            Studentbuff.S_Attend[LessonNum].month:=0;
+                            Studentbuff.S_Attend[LessonNum].year:=0;
+                            IF Studentbuff.S_TotLessons>0
+                              THEN
+                                 dec(Studentbuff.S_TotLessons);
+                            seek(StudentFile, Studentkey[i]);
+                            write(StudentFile, StudentBuff);
+                            inc(i);
+                          END; (* IF *)
+                      END; (* WHILE *)
+                    Close(StudentFile);
+                    title;
+                    fastbox(1,1,79,24,cyan,black);
+                    writexy(5,5,'*** DATA DELETE : ATTENDANCE...');
+                    textcolor(lightcyan);
+                    writexy(8,9,'Last Lesson now deleted from Students attendance Reocrds...');
+                    writexy(8,11,'Press Return to exit to menu.');
+                    readln;
+                   END; (* IF *)
+                END; (* IF *)
+              IF studentcount=0
+                THEN
+                  BEGIN
+                    title;
+                    fastbox(1,1,79,24,cyan,black);
+                    writexy(5,5,'*** DATA DELETE : ATTENDANCE...');
+                    textcolor(lightcyan);
+                    writexy(8,9,'There are currently no students in this group...');
+                    writexy(8,11,'Press Return to exit to menu.');
+                    readln;
+                  END; (* IF *)
+         END; (* if *)
+END; (* DeleteLastLesson *)
+
+(********************* END OF ATTENDANCE PROCEDURES ************************)
+
+PROCEDURE P13_PrintStudentFile;
+(* initialises the attendance for all students on a group *)
+VAR
+   range          : integer; (* holds start index to commence
+                                    printing student file from *)
+   LineCount      : integer;
+   PageCount      : Integer;
+   coloumncount   : integer;
+BEGIN
+  title;
+  fastbox(1,1,79,24,cyan,black);
+  writexy(5,5,'*** DATA PRINT : Student File RECORDS...');
+  writexy(8,8,'Is dot matrix printer setup and online ?');
+  gotoxy(55,8);
+  readln(choice);
+  IF (choice in ['y','Y'])
+    THEN
+       BEGIN
+          getdate(year,month,day,dow); (* FOR DATE TO BE PRINTED *)
+          reset(StudentFile);
+          linecount:=3;
+          pagecount:=1;
+          Repeat
+            gotoxy(8,12);
+            writeln('Enter Student Number to start printing from (0 to ',NumOfStudents-1,')');
+            gotoxy(65,12);
+            readln(range);
+          UNTIL (range in [0..NumOfStudents-1]);
+          writexy(8,14,'Do you also wish to print attendance Dates ?');
+          gotoxy(55,14);
+          readln(choice);
+          writeln(lst);
+          writeln(lst,'        Student File RECORDS...      PAGE : ',pagecount);
+          writeln(lst);
+          writeln(lst,'        DATE OF PRINTING: ',day,'/',month,'/',year);
+          writeln(lst);
+          WITH Studentbuff DO
+             BEGIN
+               key:=range;
+               seek(studentfile, key);
+               read(StudentFile,Studentbuff);
+               WHILE (key<=NumOfStudents) AND (Studentbuff.S_classID<>-1) DO
+                 BEGIN
+                   writeln(lst,'Name.......: ',S_Forname,' ',S_Surname);
+                   writeln(lst,'Student No.: ',S_Number);
+                   writeln(lst,'ClassID No.: ',S_ClassID);
+                   writeln(lst,'GCSE Pt.Scr: ',S_GCSEpts);
+                   writeln(lst,'A Level Pts: ',S_AlevelPts);
+                   writeln(lst,'Tutors Name: ',S_PTutor);
+                   writeln(lst);
+                   linecount:=linecount+11;
+                   i:=1;
+                   coloumncount:=1;
+                   If choice in ['y','Y']
+                     then
+                       writeln(lst,'  DATES...................... True=present, False=absent');
+                   WHILE (S_attend[i].day>0) and (choice in ['y','Y']) DO
+                      BEGIN
+                        write(lst,s_attend[i].day:2,'/',s_attend[i].month:2,'/',
+                                s_attend[i].year:4,' ',s_attend[i].here_or_away,'   ');
+                        IF coloumncount=4
+                          THEN
+                            BEGIN
+                              writeln(lst);
+                              inc(LineCount);
+                              coloumncount:=0;
+                            END; (* IF *)
+                        inc(coloumncount);
+                        inc(i);
+                      END; (* While *)
+                   writeln(lst);
+                   If lineCount>SizeOfPaper
+                      THEN
+                         BEGIN
+                            LineCount:=3;
+                            inc(PageCount);
+                            writeln(lst,#12);
+                            writeln(lst);
+                            writeln(lst,'        Student File RECORDS...      PAGE : ',pagecount);
+                            writeln(lst);
+                            writeln(lst,'        DATE OF PRINTING: ',day,'/',month,'/',year);
+                            writeln(lst);
+                         END; (* IF *)
+                   inc(key);
+                   Seek(studentfile, key);
+                   read(StudentFile,Studentbuff);
+                 END;(*WHILE*)
+             END;(*WITH*)
+          writeln(lst,'');
+          writeln(lst,'*************** END OF FILE ***************');
+          writeln(lst,#12);
+          close(StudentFile);
+       END
+    ELSE
+       BEGIN
+         writexy(8,10,'Return to menu, Setup printer, then try agian');
+         continue(yellow,30,22,'');
+       END; (* IF THEN ELSE *)
+END; (* P13_PrintStudentFile *)
+
+PROCEDURE S55_EndOfTerm;
+(* initialises the attendance for all students in a specific group *)
+VAR
+  groupkey       : integer;
+  studentkey     : array[0..NumOfStudents] of integer;
+
+BEGIN
+   REPEAT
+     clrscr;
+     writeln;
+     writeln(' END OF TERM PROCEDURE : ');
+     writeln;
+     writeln('  Do you wish to continue, and initialise attendance for a group ?');
+     writeln;
+     writeln('  IF `y` then you must have a hardcopy, or backup of data files.');
+     readln(choice);
+   UNTIL (choice in ['y','Y']) or (choice in ['n','N']);
+   IF choice in ['y','Y']
+      Then
+          BEGIN
+            SpecifyGroup;
+            groupkey:=key;
+            IF verified
+              Then
+                Begin
+                 (* Initialise Variables for search *)
+                  FOR i:=0 TO NumofStudents DO
+                    BEGIN
+                      StudentKey[i]:=-1;
+                    END; (* FOR *)
+                  i:=-1;
+                  key:=-1;
+                  Reset(Studentfile);
+                  (* SEARCH TO FIND ALL STUDENTS IN THE Specified Group *)
+                  REPEAT
+                    Key:=key+1;
+                    Seek(Studentfile, key);
+                    Read(Studentfile, Studentbuff);
+                    IF Studentbuff.S_ClassID=groupkey
+                      THEN
+                        BEGIN
+                          i:=i+1;
+                          StudentKey[i]:=key;
+                        END; (* IF *)
+                  UNTIL (key=numofstudents);
+                  Reset(Studentfile);
+                  i:=0;
+                  while studentkey[i]<>-1 do
+                    BEGIN
+                      seek(StudentFile, Studentkey[i]);
+                      read(StudentFile, StudentBuff);
+                      WITH StudentBuff DO
+                        BEGIN
+                          S_TotAbsent:=0;
+                          S_Totlessons:=0;
+                          FOR count:=1 TO MaxAttend DO
+                            BEGIN
+                              WITH S_ATTEND[count] DO
+                                BEGIN
+                                  here_or_away:=false;
+                                  day:=-1;
+                                  Month:=0;
+                                  Year:=0;
+                                END; (* WITH *)
+                            END; (* FOR *)
+                        END; (* WITH *)
+                      seek(StudentFile, Studentkey[i]);
+                      write(studentfile, studentbuff);
+                      inc(i);
+                    END; (* WHILE *)
+                  close(StudentFile);
+
+                  reset(GroupFile);            (* initialise group record *)
+                  seek(groupfile, groupkey);
+                  read(groupfile, groupbuff);
+                  groupbuff.TS_TotLessons:=0;
+                  seek(groupfile, groupkey);
+                  write(groupfile, groupbuff);
+                  close(groupfile);
+                  writeln;
+                  writeln(' Group and Students attendance initialised !');
+                  writeln(' PRESS Return to continue...');
+                  readln;
+                END
+              ELSE
+                BEGIN
+                   writeln;
+                   writeln('  Group File not found... ');
+                   writeln('  Press return to continue...');
+                   readln;
+                END; (* IF *)
+          END
+        ELSE
+          BEGIN
+            writeln;
+            writeln(' Group and Students attendance not initialised !');
+            writeln(' PRESS Return to continue...');
+            readln;
+          END; (* IF *)
+END; (* S55_EndOfTerm *)
+
+PROCEDURE S56_EndOfYEAR;
+(* initialises the attendance for all students in all groups *)
+BEGIN
+   REPEAT
+     clrscr;
+     writeln;
+     writeln(' END OF YEAR PROCEDURE : ');
+     writeln;
+     writeln('  Do you wish to continue, and initialise ALL attendance records ?');
+     writeln;
+     writeln('  IF `y` then you must have a hardcopy, or backup of data files.');
+     readln(choice);
+   UNTIL (choice in ['y','Y']) or (choice in ['n','N']);
+   IF choice in ['y','Y']
+    Then
+      BEGIN
+         reset(studentfile);
+         writeln;
+         writeln('  May take some time, Please be patient!');
+         FOR i:=0 to NumOfstudents DO
+           BEGIN
+              seek(studentfile, i);
+              read(studentfile, studentbuff);
+              WITH StudentBuff DO
+                BEGIN
+                   S_TotAbsent:=0;
+                   S_Totlessons:=0;
+                   FOR count:=1 TO MaxAttend DO
+                     BEGIN
+                        WITH S_ATTEND[count] DO
+                           BEGIN
+                             here_or_away:=false;
+                             day:=-1;
+                             Month:=0;
+                             Year:=0;
+                           END; (* WITH *)
+                     END; (* FOR *)
+                END; (* WITH *)
+              seek(studentfile, i);
+              write(studentfile, studentbuff);
+           END; (* FOR *)
+         close(StudentFile);
+         reset(GroupFile);
+         read(groupfile, groupbuff);
+         FOR i:=0 to maxgroups DO
+            BEGIN
+               seek(groupfile, i);
+               read(groupfile, groupbuff);
+               With groupbuff Do
+                  Begin
+                    TS_TotLessons:=0;
+                  END; (* With *)
+               seek(groupfile, i);
+               write(groupfile, groupbuff);
+            END; (* FOR *)
+         close(groupfile);
+         writeln;
+         writeln(' Attendance initialised !');
+         writeln(' PRESS Return to continue...');
+         readln;
+      END
+    ELSE
+      BEGIN
+         writeln;
+         writeln(' Attendance not initialised !');
+         writeln(' PRESS Return to continue...');
+         readln;
+      END; (* IF *)
+END; (* S56_EndOfYear*)
+
+(**************************** MENU PROCEDURES ******************************)
+
+PROCEDURE M_MainMenuHelp; (* menu help screen *)
+BEGIN
+     title;
+     fastbox(1,1,79,24,blue,black);
+     writexy(4,7,'M A I N  M E N U  H E L P  S C R E E N...');
+     writexy(4,9,'(1) MAIN MENU   : From this, the Main Menu, you can access all the');
+     writexy(21,10,'features of this excellent program.');
+     writexy(4,12,'(2) LETTER KEYS : You will notice that there are a number of menu items');
+     writexy(21,13,'which use other keys on the keyboard, in this case either ');
+     writexy(21,14,'capital or lower case letter will be allowed.');
+     writexy(4,16,'(3) SYSTEM MENU : To goto this menu you must first enter the password,');
+     writexy(21,17,'which was used to gain access to system.');
+     textcolor(lightred);
+     writexy(4,19,'It is advisable to change your password the first time you use the system!');
+     continue(yellow+blink,30,22,'');
+END; (* MAIN MENU HELP *)
+
+PROCEDURE M_AttendMenuHELP; (* menu help screen *)
+BEGIN
+     title;
+     fastbox(1,1,79,24,blue,black);
+     writexy(4,7,'A T T E N D A N C E  M E N U  H E L P  S C R E E N...');
+     writexy(4,9,'(1) SELECTION   : Simply press number key of coresponding menu item.');
+     writexy(5,10,'e.g. To goto Lesson attendance entry, Press NUMBER 1, then RETURN.');
+     writexy(4,12,'(2) You must initialise the weekly absence note for Tutor at the');
+     writexy(5,13,'end of every week, ie after your last lesson on Friday;');
+     writexy(5,14,'Remember that you must have a hard copy of this, as the file is rewritten');
+     continue(yellow+blink,30,22,'');
+END; (* M_AttendMenuHELP *)
+
+PROCEDURE M_PrintMenuHELP;  (* menu help screen *)
+BEGIN
+     title;
+     fastbox(1,1,79,24,blue,black);
+     writexy(12,5,'* * * * * * * * P R I N T  M E N U  H E L P * * * * * * * *');
+     writexy(4,9,'(1) This menu is designed so that you can print any of the reports');
+     writexy(4,10,'   from a central place, most printing can be done from their repective menu.');
+     continue(yellow+blink,30,22,'');
+END; (* M_PrintMenuHELP *)
+
+PROCEDURE M_GroupMenuHelp;  (* menu help screen *)
+BEGIN
+     title;
+     fastbox(1,1,79,24,blue,black);
+     writexy(12,5,'* * * * * * * * G R O U P  M E N U  H E L P * * * * * * * *');
+     writexy(4,9,'(1) Once created a group record can not be edited, if you wish to change ');
+     writexy(4,10,'   any of your group records, then they can only be deleted, but the ');
+     writexy(4,10,'   deletion of a group will result in all students in that group being deleted');
+     writexy(4,13,'(2) At the beginning of the accademic year you will have to edit the');
+     writexy(4,14,'    students records, to change their Class ID Number, obviously');
+     writexy(4,15,'    some students may need to be deleted as they have left the college.');
+     continue(yellow+blink,30,22,'');
+END; (* M_GroupMenuHelp *)
+
+PROCEDURE M_StudentMenuHelp; (* menu help screen *)
+BEGIN
+     title;
+     fastbox(1,1,79,24,blue,black);
+     writexy(8,5,'* * * * * * * * S T U D E N T  M E N U  H E L P * * * * * * * *');
+     writexy(4,9,'(1) To create a student Press "1", and to view attendance record of a');
+     writexy(4,10,'   a student SEE Main menu-Attendance Menu');
+     continue(yellow+blink,30,22,'');
+END; (* M_StudentMenuHelp *)
+
+PROCEDURE M_SystemMenuHelp;  (* menu help screen *)
+BEGIN
+     title;
+     fastbox(1,1,79,24,blue,black);
+     writexy(11,5,'* * * * * * * * S Y S T E M  M E N U  H E L P * * * * * * * *');
+     writexy(4,9,'(1) Use the options in this menu with caution. ALWAYS read the manual');
+     writexy(4,11,'(2) You are advised to make regular backups, both using option "2"');
+     writexy(4,12,'   and using the print files options in the print menu');
+     continue(yellow+blink,30,22,'');
+END; (* M_SystemMenuHelp *)
+
+PROCEDURE M15_SystemMenu;
+VAR
+exit        : boolean;
+c           : char;
+
+BEGIN
+     exit:=true;
+     past:=false;
+     P_pss;
+     IF past
+        THEN
+            BEGIN
+              REPEAT
+                 title;
+                 textcolor(red);
+                 writexy(31,24,'User Access Level 1');
+                 textcolor(lightcyan);
+                 fastbox(1,1,79,24,red,black);
+                 writexy(15,5,'* * * * * * * * * S Y S T E M * * * * * * * * *');
+                 writexy(11,9,'SELECT A MENU OPTION...');
+                 writexy(12,11,'(1) Initialise files...');
+                 writexy(14,13,'(2) Backup system...');
+                 writexy(16,15,'(3) Change password...');
+                 writexy(42,11,'(4) Set system DATE...');
+                 writexy(44,13,'(5) End of term...');
+                 writexy(46,15,'(6) End of year...');
+                 writexy(18,17,'(i) Information/help...');
+                 writexy(20,19,'(e) EXIT To Previous Menu...');
+                 writexy(12,20,'.');
+                 gotoxy(12,20);
+                 c:=' ';
+                 readln(c);
+                 CASE c OF
+
+                      '1'     : S51_InitialiseFiles;
+                      '2'     : S52_SysBackup;
+                      '3'     : SP53_ChangePassword;
+                      '4'     : S54_SetSystemDate;
+                      '5'     : S55_EndOfTerm;
+                      '6'     : S56_EndOfYear;
+                      'i','I' : M_SystemMenuHelp;
+                      'e','E' : BEGIN
+                                     exit:=false;
+                                END;
+                 ELSE
+                     textcolor(white);
+                     writexy(25,21,'INVALID SELCECTION, TRY AGAIN...');
+                     continue(yellow+blink,30,22,'');
+                 END; (*CASE/ELSE*)
+              UNTIL exit=false; (* MENU *)
+           END; (* IF past *)
+END; (* SystemMenu *)
+
+PROCEDURE M14_PrintMenu;
+VAR
+exit        : boolean;
+c           : char;
+
+BEGIN
+     exit:=true;
+     REPEAT
+           title;
+           textcolor(red);
+           writexy(31,24,'User Access Level 2');
+           textcolor(lightcyan);
+           fastbox(1,1,79,24,lightblue,black);
+           writexy(15,5,'* * * * * * * * P R I N T  M E N U * * * * * * * *');
+           writexy(11,9,'SELECT A MENU OPTION...');
+           writexy(12,11,'(1) Print attendance stats...');
+           writexy(14,13,'(2) Print group list (List 1)...');
+           writexy(16,15,'(3) DUMP student file...');
+           writexy(42,11,'(4) Print weekly note for tutors...');
+           writexy(18,17,'(i) Information/Help...');
+           writexy(20,19,'(e) EXIT To Previous Menu...');
+           writexy(12,20,'.');
+           gotoxy(12,20);
+           c:=' ';
+           readln(c);
+           CASE c OF
+                '1'     : P11_Printattend;
+                '2'     : P12_PrintGroupList;
+                '3'     : P13_PrintStudentFile;
+                '4'     : TX_PrintAttendNoteFile;
+                'i','I' : M_PrintMenuHELP;
+                'e','E' : BEGIN
+                               exit:=false;
+                          END;
+           ELSE
+               textcolor(white);
+               writexy(25,21,'INVALID SELCECTION, TRY AGAIN...');
+               continue(yellow+blink,30,22,'');
+           END; (*CASE/ELSE*)
+     UNTIL exit=false; (* MENU *)
+END; (* Print Menu *)
+
+PROCEDURE M13_StudentMenu;
+VAR
+exit        : boolean;
+exitchoice  : char;
+c           : char;
+
+BEGIN
+  REPEAT
+     title;
+     exit:=true;
+     fastbox(1,1,79,24,blue,black);
+     textcolor(red);
+     writexy(31,24,'User Access Level 2');
+     textcolor(lightcyan);
+     writexy(12,5,'* * * * * * * * S T U D E N T  M E N U * * * * * * * *');
+     writexy(11,9,'SELECT A MENU OPTION...');
+     writexy(12,11,'(1) Add student Record...');
+     writexy(14,13,'(2) Edit a student record...');
+     writexy(16,15,'(3) Delete student record...');
+     writexy(42,11,'(4) View student record...');
+     writexy(44,13,'(5) DUMP Student file...');
+     writexy(18,17,'(i) Information/help...');
+     writexy(20,19,'(e) EXIT To Previous Menu...');
+     writexy(12,20,'.');
+     gotoxy(12,20);
+     c:=' ';
+     readln(c);
+     CASE c OF
+          '1'     : S11_AddStudent;
+          '2'     : S12_EditStudRec;
+          '3'     : S13_DeleteStudent;
+          '4'     : S14_ViewStudent;
+          '5'     : P13_PrintStudentFile;
+          'i','I' : M_StudentMenuHelp;
+          'e','E' : BEGIN
+                         exit:=false;
+                    END;
+     ELSE
+         textcolor(white);
+         writexy(20,21,'INVALID SELCECTION (See Help), TRY AGAIN...');
+         continue(yellow+blink,30,22,'');
+     END; (*CASE/ELSE*)
+  UNTIL exit=false;
+END; (* M3_StudentMenu *)
+
+
+PROCEDURE M12_GroupMenu;
+VAR
+exit        : boolean;
+c           : char;
+
+BEGIN
+  REPEAT
+     title;
+     exit:=true;
+     fastbox(1,1,79,24,lightblue,black);
+     textcolor(red);
+     writexy(31,24,'User Access Level 2');
+     textcolor(lightcyan);
+     writexy(17,5,'* * * * * * * * * G R O U P   M E N U * * * * * * * * *');
+     writexy(11,9,'SELECT A MENU OPTION...');
+     writexy(12,11,'(1) Create group record...');
+     writexy(14,13,'(2) View group list (Also known as list1)...');
+     writexy(16,15,'(3) Print group list...');
+     writexy(42,11,'(4) Delete group record...');
+     writexy(18,17,'(i) Information/help...');
+     writexy(20,19,'(e) EXIT To Previous Menu...');
+     writexy(12,20,'.');
+     gotoxy(12,20);
+     c:=' ';
+     readln(c);
+     CASE c OF
+          '1'     : G11_CreateGroupRecord;
+          '2'     : G12_ViewGroups;
+          '3'     : P12_PrintGroupList;
+          '4'     : G14_DeleteGroupRecord;
+          'i','I' : M_GroupMenuHelp;
+          'e','E' : BEGIN
+                         exit:=false;
+                    END;
+     ELSE
+         textcolor(white);
+         writexy(25,21,'INVALID SELCECTION, TRY AGAIN...');
+         continue(yellow+blink,30,22,'');
+     END; (*CASE/ELSE*)
+  UNTIL exit=false;
+END; (* GROUP MENU *)
+
+
+PROCEDURE M11_AttendanceMenu;
+VAR
+exit        : boolean;
+c           : char;
+
+BEGIN
+  REPEAT
+     title;
+     exit:=true;
+     fastbox(1,1,79,24,LightBlue,black);
+     textcolor(red);
+     writexy(31,24,'User Access Level 2');
+     textcolor(lightcyan);
+     writexy(9,5,'* * * * * * * * * A T T E N D A N C E  M E N U * * * * * * * * *');
+     writexy(8,9,'SELECT A MENU OPTION...');
+     writexy(9,11,'(1) Lesson attendance entry...');
+     writexy(11,13,'(2) Alter student`s attendance...');
+     writexy(13,15,'(3) A student`s attendance(Dates)...');
+     writexy(42,11,'(4) Attendance statistics (Totals)...');
+     writexy(44,13,'(5) Print weekly note for tutors...');
+     writexy(46,15,'(6) Reset absence note file...');
+     writexy(48,17,'(7) Delete last lesson...');
+     writexy(15,17,'(i) Information/help...');
+     writexy(17,19,'(e) EXIT To Previous Menu...');
+     writexy(12,20,'.');
+     gotoxy(12,20);
+     c:=' ';
+     readln(c);
+     CASE c OF
+          '1'     : A11_AttendanceEntry;
+          '2'     : A12_ChangeAttendance;
+          '3'     : A13_ViewStudentAttendance;
+          '4'     : A14_GroupAttendStats;
+          '5'     : TX_PrintAttendNoteFile;
+          '6'     : TX_InitAttendNoteFile;
+          '7'     : A17_DeleteLastLesson;
+          'i','I' : M_AttendMenuHELP;
+          'e','E' : BEGIN
+                         exit:=false;
+                    END;
+     ELSE
+         textcolor(white);
+         writexy(25,21,'INVALID SELCECTION, TRY AGAIN...');
+         continue(yellow+blink,30,22,'');
+     END; (*CASE/ELSE*)
+  UNTIL exit=false;
+END; (* ATTENDENCE MENU *)
+
+PROCEDURE M1_MainMenu;
+VAR
+exit        : boolean;
+exitchoice  : char;
+c           : char;
+
+BEGIN
+  REPEAT
+     title;
+     exit:=true;
+     fastbox(1,1,79,24,blue,black);
+     textcolor(red);
+     writexy(31,24,'User Access Level 2');
+     textcolor(lightcyan);
+     writexy(15,5,'* * * * * * * * * M A I N  M E N U * * * * * * * * *');
+     writexy(11,9,'SELECT A MENU OPTION...');
+     writexy(12,11,'(1) Attendance menu...');
+     writexy(14,13,'(2) Group menu...');
+     writexy(16,15,'(3) Student menu...');
+     writexy(42,11,'(4) Print menu...');
+     writexy(44,13,'(5) System menu...');
+     writexy(18,17,'(i) Information/help...');
+     writexy(20,19,'(e) EXIT From System');
+     writexy(12,20,'.');
+     gotoxy(12,20);
+     c:=' ';
+     readln(c);
+     CASE c OF
+          '1'     : M11_AttendanceMenu;
+          '2'     : M12_GroupMenu;
+          '3'     : M13_StudentMenu;
+          '4'     : M14_PrintMenu;
+          '5'     : M15_SystemMenu;
+          'i','I' : M_MainMenuHelp;
+          'e','E' : BEGIN
+                        textcolor(yellow);
+                        writexy(23,22,'Confirm exit from system (y/n)...');
+                        gotoxy(12,20);
+                        textcolor(lightcyan);
+                        exitchoice := readkey;
+                        IF exitchoice in ['y','Y'] then exit:=false;
+                    END;
+     ELSE
+         textcolor(white);
+         writexy(20,21,'INVALID SELCECTION (See Help), TRY AGAIN...');
+         continue(yellow+blink,30,22,'')
+     END; (*CASE/ELSE*)
+  UNTIL exit=false
+END; (* MAIN MENU *)
+
+(****************************************************************************)
+(************* M A I N   P R O G R A M   S T A R T S   H E R E **************)
+(****************************************************************************)
+
+BEGIN
+     textcolor(white);    (* Set colors to delfault *)
+     textbackground(black);
+     clrscr;
+     P_pss;     (* password protection procedure *)
+     IF past    (* past : boolean identifier, product of procedure P_pss *)
+        THEN
+            BEGIN
+               AssignFiles; (* Startup/check and initialisation *)
+               intro;       (* graphic opening screen *)
+               M1_MainMenu
+            END;
+END.
+(****************************************************************************)
+(****************************************************************************)
+(* THATS ALL THERE IS TO IT!!!! *)
